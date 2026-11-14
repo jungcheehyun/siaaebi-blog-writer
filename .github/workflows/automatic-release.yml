@@ -1,0 +1,101 @@
+name: Build and publish SiaAebi Windows update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - app.py
+      - exe_updater.py
+      - requirements.txt
+      - make_release.py
+      - .github/workflows/automatic-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: siaaebi-release
+  cancel-in-progress: false
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate source and version
+        id: version
+        shell: pwsh
+        run: |
+          @'
+          import ast, os, pathlib, re
+          for name in ('app.py', 'exe_updater.py', 'requirements.txt', 'make_release.py'):
+              if not pathlib.Path(name).is_file():
+                  raise SystemExit(f'Missing {name}: source must be uploaded before releasing')
+          tree = ast.parse(pathlib.Path('app.py').read_text(encoding='utf-8'))
+          versions = [node.value.value for node in tree.body
+                      if isinstance(node, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == 'APP_VERSION' for t in node.targets)
+                      and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
+          if len(versions) != 1 or not re.fullmatch(r'v[0-9]+(\.[0-9]+)*', versions[0]):
+              raise SystemExit('APP_VERSION must be a literal like v18.2')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              print('version=' + versions[0], file=f)
+          '@ | python -
+      - name: Check whether version already exists
+        id: existing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release view "$env:VERSION" --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          }
+      - name: Install dependencies
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install -r requirements.txt
+      - name: Build EXEs
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name SiaAebiBlogWriter --collect-all playwright --collect-all PIL app.py
+          if ($LASTEXITCODE -ne 0) { throw 'App build failed' }
+          python -m PyInstaller --noconfirm --clean --windowed --onefile --name SiaAebiUpdater exe_updater.py
+          if ($LASTEXITCODE -ne 0) { throw 'Updater build failed' }
+      - name: Package and verify update
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force SiaAebi_Install/app | Out-Null
+          Copy-Item dist/SiaAebiBlogWriter/* SiaAebi_Install/app/ -Recurse -Force
+          python make_release.py
+          if ($LASTEXITCODE -ne 0) { throw 'Package failed' }
+          @'
+          from pathlib import Path
+          import zipfile, hashlib
+          zipfile_path = Path('GitHub_Release_Assets/siaaebi-update.zip')
+          checksum = Path('GitHub_Release_Assets/siaaebi-update.zip.sha256').read_text().split()[0]
+          assert hashlib.sha256(zipfile_path.read_bytes()).hexdigest() == checksum
+          with zipfile.ZipFile(zipfile_path) as z:
+              assert 'SiaAebiBlogWriter.exe' in z.namelist()
+          '@ | python -
+      - name: Publish latest GitHub release
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$env:VERSION" "GitHub_Release_Assets/siaaebi-update.zip" "GitHub_Release_Assets/siaaebi-update.zip.sha256" --title "$env:VERSION 시아애비 블로그 자동작성기" --notes "기존 프로그램에서 업데이트 확인을 누르세요" --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
