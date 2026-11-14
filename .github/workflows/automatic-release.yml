@@ -10,6 +10,8 @@ on:
       - make_release.py
       - .github/workflows/automatic-release.yml
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -60,7 +62,7 @@ jobs:
             "exists=false" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           }
       - name: Install dependencies
-        if: steps.existing.outputs.exists == 'false'
+        if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
         shell: pwsh
         run: |
           python -m pip install --upgrade pip pyinstaller
@@ -91,7 +93,7 @@ jobs:
               assert 'SiaAebiBlogWriter.exe' in z.namelist()
           '@ | python -
       - name: Publish latest GitHub release
-        if: steps.existing.outputs.exists == 'false'
+        if: github.event_name != 'pull_request' && steps.existing.outputs.exists == 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
