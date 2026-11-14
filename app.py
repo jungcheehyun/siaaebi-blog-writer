@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.5'
+APP_VERSION = 'v18.6'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -214,685 +214,49 @@ def clean_data(data):
     return data
 
 
-PHOTO_MARKER = re.compile(r'^\\s*(?:📸\\s*)?\\[사진(?:\\s+(\\d+)(?:\\s*[—–-]\\s*[^\\]]*)?)?\\]\\s*(.*?)\\s*
-    """Without image analysis, don't fabricate photo-specific Q&A or repeat filler."""
-    shop=shop.strip() or '방문한 곳'
-    menu=menu.strip() or '메뉴'
-    blocks=[{'type':'hero_quote','value':shop}]
-    if notes.strip():
-        blocks.append({'type':'text','value':notes.strip()})
-    else:
-        blocks.append({'type':'text','value':'방문 후기를 작성하려면 실제 방문 메모를 적어 주세요'})
-    for photo in photos:
-        blocks.append({'type':'image','path':str(photo),'caption':''})
-    if must_include.strip():
-        blocks.append({'type':'text','value':must_include.strip()})
-    blocks.append({'type':'text','value':'지금까지 시아애비였습니다! ❤️'})
-    return {'title':make_hook_title(shop,menu),'blocks':blocks}
-
-
-def ai_draft(api_key, shop, menu, notes, photos, must_include="", keywords="", style_sample=""):
-    """OpenAI API calls do not have access to this ChatGPT conversation."""
-    from openai import OpenAI
-    from PIL import Image
-    import base64
-
-    client = OpenAI(api_key=api_key, timeout=180)
-    instruction = (
-        "당신은 자연스러운 한국어 맛집 블로그의 전문 공동 작가입니다. 필명은 시아애비입니다. "
-        "사진의 순서를 유지하면서 실제 사람이 방문해 소개하는 것처럼 유기적으로 이어지는 후기를 써 주세요. "
-        "글은 독자가 편하게 읽을 수 있는 친근한 존댓말이고, 말끝은 ~했어요, ~더라고요, ㅎㅎ 등을 지나치지 않게 섞으세요. "
-        "사진마다 Q&A를 만들되 사진 자체에 대한 의미 없는 질문은 절대 금지합니다. "
-        "금지 예: 방문 사진 1, 사진으로 보시죠, 사진에는 무엇이 있을까요, 다음 사진은, 이번 사진에서 보이는 것은, 이 장면, 이 장면도, 남겨둔 기록, 사진에 담긴 구체적인 내용은 직접 확인해 주세요. "
-        "독자가 해당 방문 장소에 대해 실제로 궁금해할 질문을 사진에 드러난 구체적인 내용과 앞뒤 맥락에서 고르세요. "
-        "반복되는 문장 시작, 뻔한 광고 표현, 과한 느낌표, 로봇처럼 나열하는 문체를 제거하세요. "
-        "한 질문에 대한 답변은 2~4문장으로 리듬감 있게 쓰되 사진 설명만 나열하지 말고 방문 이야기가 자연스럽게 이어지도록 하세요. "
-        "사진으로 알 수 없는 맛, 가격, 주문 경험, 주차, 서비스, 감정, 가족 구성은 임의로 만들어내면 안 됩니다. "
-        "방문 메모는 사용자가 직접 확인한 사실로 존중하지만 필요하다면 문장만 자연스럽게 다듬으세요. "
-        "글투 참고 예시는 문체만 참고하고 그 글에 담긴 가게 정보나 경험을 현재 방문기로 옮기지 마세요. "
-        "도입문(intro)은 2~4문장 정도의 자연스러운 인사와 장소 소개로 직접 작성하세요. "
-        "마무리(closing)는 이 방문에서 확인한 사항을 정리하며 읽는 이에게 도움이 되는 자연스러운 소감으로 쓰세요. "
-        "상호명은 적절히 사용하되 자꾸 반복하지 마세요. 제목은 모바일에서 읽기 좋은 짧은 형태로 작성하세요. "
-        "문장 끝 마침표는 생략하고 친근한 존댓말을 유지하세요. "
-        "필수 문구는 프로그램에서 원문 그대로 삽입하므로 AI는 중복해서 쓰지 마세요. "
-        "사진 수와 sections 개수는 반드시 같아야 하며 사진 순서를 절대 바꾸면 안 됩니다. "
-        "JSON 객체만 반환하세요. 필드: title(문자열), intro(문자열), sections(순서대로 q,a 쌍), closing(문자열).\n"
-        f"상호명: {shop}\n주문/대표 메뉴: {menu}\n직접 방문 메모: {notes}\n"
-        f"필수 문구: {must_include}\n강조 키워드: {keywords}\n사진 수: {len(photos)}\n"
-        f"문체 참고 예시(사실로 사용 금지):\n{style_sample[:4500]}"
-    )
-    content = [{"type": "text", "text": instruction}]
-    for i, p in enumerate(photos):
-        with Image.open(p) as im:
-            im.seek(0)
-            im = im.convert("RGB")
-            im.thumbnail((1100, 1100))
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=82)
-        content.append({"type": "text", "text": f"{i+1}번 사진, 이 순서로 질문과 답변을 작성하세요. 파일명은 사진 내용의 근거가 아닙니다."})
-        content.append({"type": "image_url", "image_url": {
-            "url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode(), "detail": "high"}})
-    result = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=[{"role": "user", "content": content}],
-        response_format={"type": "json_object"}
-    )
-    raw = result.choices[0].message.content
-    if not raw:
-        raise ValueError("AI에서 원고를 받지 못했습니다. 다시 원고 생성을 눌러 주세요.")
-    obj = json.loads(raw)
-    sections = obj.get("sections", [])
-    if not isinstance(sections, list) or len(sections) != len(photos):
-        raise ValueError(f"사진은 {len(photos)}장인데 생성된 문단이 {len(sections) if isinstance(sections,list) else 0}개입니다. 다시 원고 생성을 눌러 주세요.")
-    return compose(shop, menu, notes, photos, sections, obj.get("title"),
-                   must_include=must_include, keywords=keywords,
-                   ai_intro=obj.get("intro"), ai_closing=obj.get("closing"))
-
-
-def save_preview(data):
-    (OUTPUT/'원고.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
-    pieces=[]
-    for block in data['blocks']:
-        typ=block['type']
-        if typ=='hero_quote':
-            pieces.append('<div class="heroquote"><span>❝</span><em>'+html.escape(block['value'])+'</em><span>❞</span></div>')
-        elif typ in ('question','final_quote'):
-            pieces.append('<blockquote class="question"><span class="quote-mark">❝</span><span class="quote-text">'+html.escape(block['value'])+'</span><span class="quote-underline"></span></blockquote>')
-        elif typ=='answer_label':
-            pieces.append('<p class="answer-label">A.</p>')
-        elif typ=='text':
-            for para in block['value'].split('\n'):
-                if para.strip():pieces.append('<p>'+html.escape(para)+'</p>')
-        elif typ=='image':
-            uri=Path(block['path']).resolve().as_uri()
-            pieces.append('<figure><img src="'+uri+'"><figcaption>'+html.escape(block.get('caption',''))+'</figcaption></figure>')
-    # 모바일 본문 폭을 기준으로 미리보기. 텍스트는 모두 왼쪽, 사진만 가운데.
-    style = """
-    *{box-sizing:border-box}
-    body{font-family:"Malgun Gothic",Arial,sans-serif;max-width:390px;
-         margin:18px auto;padding:16px;color:#666;line-height:1.85;font-size:15px;
-         text-align:left;overflow-wrap:break-word}
-    h1{font-size:24px;font-weight:400;color:#333;line-height:1.5;
-       margin:0 0 24px;text-align:left;white-space:nowrap;font-size:clamp(13px,4.4vw,20px)}
-    p{margin:0 0 14px;white-space:pre-wrap;text-align:left}
-    .heroquote{display:flex;align-items:flex-start;flex-direction:column;gap:7px;
-       margin:14px 0 25px;text-align:left;color:#888;font-family:Georgia,serif;font-size:18px}
-    .heroquote span{font-size:26px;color:#bbb;line-height:1}
-    .heroquote em{font-size:clamp(11px,3.5vw,15px);text-align:left;white-space:nowrap}
-    .question{margin:36px 0 22px;padding:8px 0;border:0;background:none;
-       font-weight:500;color:#555;font-size:17px;display:flex;flex-direction:column;
-       align-items:flex-start;gap:7px;text-align:left}
-    .quote-mark{color:#999;font-family:Georgia,serif;font-size:25px;line-height:1}
-    .quote-text{font-size:17px;text-align:left}
-    .quote-underline{height:2px;background:#888;width:105px;display:block}
-    figure{margin:18px auto 26px;text-align:center;width:100%}
-    figure img{display:block;max-width:100%;width:auto;max-height:620px;
-       height:auto;object-fit:contain;margin:0 auto}
-    figcaption{color:#888;font-size:12px;text-align:center;margin-top:6px}
-    .answer-label{margin:18px 0 12px!important;text-align:left}
-    @media(max-width:420px){body{max-width:100%;margin:0 auto;padding:14px}}
-    """
-    doc='<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+html.escape(data['title'])+'</title><style>'+style+'</style><h1>'+html.escape(data['title'])+'</h1>'+''.join(pieces)+'</html>'
-    out=OUTPUT/'블로그_미리보기.html';out.write_text(doc,encoding='utf-8');return out
-
-
-def clipboard_image(path):
-    import win32clipboard  # pywin32 (requirements 참조)
-    from PIL import Image
-    with Image.open(path) as im:
-        im.seek(0)
-        output = io.BytesIO()
-        im.convert('RGB').save(output, 'BMP')
-    dib = output.getvalue()[14:]
-    for attempt in range(5):
-        try:
-            win32clipboard.OpenClipboard()
-            try:
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, dib)
-            finally:
-                win32clipboard.CloseClipboard()
-            return
-        except Exception:
-            time.sleep(.3)
-    raise RuntimeError('이미지 클립보드 복사 실패')
-
-
-def tidy_text(value):
-    """Remove blank lines while retaining intentional single line breaks."""
-    lines=[re.sub(r'[ \t]+', ' ', line).strip() for line in str(value).replace('\r','').split('\n')]
-    return '\n'.join(line for line in lines if line)
-
-
-class InputCancelled(Exception):
-    pass
-
-def check_control(pause_event=None, stop_event=None):
-    if stop_event is not None and stop_event.is_set():
-        raise InputCancelled('F9로 자동 입력을 중지했습니다')
-    if pause_event is not None:
-        while not pause_event.wait(.1):
-            if stop_event is not None and stop_event.is_set():
-                raise InputCancelled('F9로 자동 입력을 중지했습니다')
-    if stop_event is not None and stop_event.is_set():
-        raise InputCancelled('F9로 자동 입력을 중지했습니다')
-
-def type_unicode_text(value, chars_per_minute=850, pause_event=None, stop_event=None):
-    """Windows Unicode SendInput: key events, not clipboard paste.
-    500 characters/minute is only an approximation of Korean 500 타/minute.
-    """
-    import ctypes
-    from ctypes import wintypes
-    import pyautogui
-    user32=ctypes.windll.user32
-    INPUT_KEYBOARD=1; KEYEVENTF_UNICODE=0x0004; KEYEVENTF_KEYUP=0x0002
-    ULONG_PTR=ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p)==8 else ctypes.c_ulong
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_=[('wVk',wintypes.WORD),('wScan',wintypes.WORD),('dwFlags',wintypes.DWORD),('time',wintypes.DWORD),('dwExtraInfo',ULONG_PTR)]
-    class _INPUT_UNION(ctypes.Union):
-        _fields_=[('ki',KEYBDINPUT),('padding',ctypes.c_byte*32)]
-    class INPUT(ctypes.Structure):
-        _fields_=[('type',wintypes.DWORD),('union',_INPUT_UNION)]
-    delay=60.0/max(1,chars_per_minute)
-    for char in tidy_text(value):
-        check_control(pause_event,stop_event)
-        if char=='\n':
-            pyautogui.press('enter')
-        else:
-            # Windows SendInput with UTF-16 units supports Hangul and emoji.
-            units=char.encode('utf-16-le')
-            for off in range(0,len(units),2):
-                unit=int.from_bytes(units[off:off+2],'little')
-                for flags in (KEYEVENTF_UNICODE,KEYEVENTF_UNICODE|KEYEVENTF_KEYUP):
-                    ev=INPUT();ev.type=INPUT_KEYBOARD
-                    ev.union.ki=KEYBDINPUT(0,unit,flags,0,0)
-                    if user32.SendInput(1,ctypes.byref(ev),ctypes.sizeof(INPUT))!=1:
-                        raise RuntimeError('Windows 키보드 입력에 실패했습니다.')
-        time.sleep(delay)
-
-
-def _wait_for_native_file_dialog(timeout=8.0):
-    """Return true only when the foreground Windows file picker is active."""
-    import win32gui
-    deadline=time.monotonic()+timeout
-    while time.monotonic()<deadline:
-        try:
-            hwnd=win32gui.GetForegroundWindow()
-            if hwnd and win32gui.GetClassName(hwnd)=='#32770':
-                return True
-        except Exception:
-            pass
-        time.sleep(.2)
-    return False
-
-
-def upload_via_naver_button(path, photo_button, notify):
-    """Fail closed when Windows file picker is missing; never type path into blog."""
-    import pyautogui, pyperclip
-    if not photo_button:
-        raise RuntimeError('네이버 사진 첨부 버튼 위치가 지정되지 않았습니다.')
-    path=Path(path).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f'사진 파일이 존재하지 않습니다: {path}\n원고 생성 후 사진 폴더를 옮겼다면 원고를 다시 생성하세요.')
-    if not _wait_for_native_file_dialog(timeout=.3):
-        pyautogui.click(*photo_button)
-    if not _wait_for_native_file_dialog(timeout=8.0):
-        raise RuntimeError('사진 선택 창을 확인하지 못했습니다. 본문에 파일 경로를 입력하지 않고 중지합니다.\n사진 버튼 좌표, 네이버 화면 위치, 첨부 메뉴를 확인하세요.')
-    # Windows common file dialog: Alt+N focuses the File name edit.
-    pyautogui.hotkey('alt','n')
-    time.sleep(.25)
-    pyperclip.copy(str(path))
-    pyautogui.hotkey('ctrl','v')
-    time.sleep(.3)
-    pyautogui.press('enter')
-    # Wait for the picker to close, rather than blindly typing the next block.
-    deadline=time.monotonic()+12.0
-    import win32gui
-    while time.monotonic()<deadline:
-        try:
-            hwnd=win32gui.GetForegroundWindow()
-            if not hwnd or win32gui.GetClassName(hwnd)!='#32770':break
-        except Exception:break
-        time.sleep(.25)
-    else:
-        raise RuntimeError(f'사진 선택 창이 닫히지 않았습니다: {path.name}. 파일 이름 오류를 확인해 주세요.')
-    time.sleep(3.0 if path.suffix.lower()!='.gif' else 4.5)
-    notify('사진 선택 창 처리 완료: '+path.name+' — 화면에서 업로드 결과를 확인해 주세요.')
-
-
-def apply_quote(quote_button, quote_style, notify):
-    """Use actual SmartEditor quotation menu; both positions captured by user."""
-    import pyautogui
-    if not quote_button or not quote_style:
-        raise RuntimeError('네이버 인용구 버튼과 따옴표 스타일 위치를 모두 지정해야 합니다')
-    pyautogui.click(*quote_button)
-    time.sleep(.45)
-    pyautogui.click(*quote_style)
-    time.sleep(.5)
-    notify('네이버 실제 인용구 메뉴 선택 완료 — 화면에서 서식 적용 여부를 확인하세요')
-
-
-def click_below_intro_quote(body_point, offset_px, notify):
-    """Leave the first quotation by clicking in the ordinary body area below it.
-
-    Naver SmartEditor can leave a caret *inside* a quote after Enter. Use an
-    explicit click instead. The offset is screen pixels relative to the
-    user-captured first-body position (adjustable for browser zoom/DPI).
-    """
-    import pyautogui
-    if not body_point:
-        raise RuntimeError('본문 시작 위치가 지정되지 않았습니다')
-    screen_w, screen_h = pyautogui.size()
-    x = max(8, min(int(body_point[0]), screen_w - 9))
-    y = max(8, min(int(body_point[1]) + int(offset_px), screen_h - 45))
-    pyautogui.click(x, y)
-    time.sleep(.4)
-    notify(f'인용구 밖 본문 클릭: ({x}, {y}) · 글이 인용구 밖에 입력되는지 확인하세요')
-
-
-def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
-                   quote_button, subtitle_quote_style, question_quote_style, final_quote_style,
-                   quote_exit_offset, pause_event, stop_event):
-    """Foreground keyboard entry; never publishes or saves."""
-    import pyautogui
-    pyautogui.PAUSE=.08
-    webbrowser.open('https://blog.naver.com/')
-    notify('네이버 글쓰기 화면의 제목 칸을 클릭한 뒤 F7 또는 [입력 시작]을 누르세요')
-    if not wait_for_focus():return
-    for _ in range(50):
-        check_control(pause_event,stop_event)
-        time.sleep(.1)
-    missing=[b['path'] for b in data['blocks'] if b['type']=='image' and not Path(b['path']).is_file()]
-    if missing:
-        raise FileNotFoundError('사진이 이동되거나 삭제되었습니다. 사진 폴더를 다시 선택하고 원고를 새로 생성하세요: '+str(missing[0]))
-    type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
-    # Do NOT use Tab: in SmartEditor it can keep focus in the title field.
-    # Click a user-captured point inside the actual body instead.
-    if not body_point:
-        raise RuntimeError('본문 시작 위치가 지정되지 않았습니다')
-    pyautogui.click(*body_point)
-    time.sleep(.55)
-    previous=None
-    blocks=data['blocks']
-    for i,b in enumerate(blocks):
-        check_control(pause_event,stop_event)
-        kind=b['type']
-        next_kind=blocks[i+1]['type'] if i+1<len(blocks) else None
-        if kind=='image':
-            upload_via_naver_button(b['path'],photo_button,notify)
-            check_control(pause_event,stop_event)
-            # The user specifically wants A. immediately after the photo.
-            # NEVER synthesize an Enter after the photo: it creates a blank
-            # paragraph in their editor. Move to the end only, then type A.
-            # The editor must expose its normal post-image text caret.
-            pyautogui.press('end')
-        elif kind in ('hero_quote','question','final_quote'):
-            if previous not in (None,'image'):
-                pyautogui.press('enter')
-            selected_style = (subtitle_quote_style if kind == 'hero_quote' else
-                              final_quote_style if kind == 'final_quote' else question_quote_style)
-            apply_quote(quote_button,selected_style,notify)
-            type_unicode_text(b['value'],pause_event=pause_event,stop_event=stop_event)
-            # For the *first* subtitle quotation only, explicitly leave the
-            # quote by clicking below it. The question quote path is unchanged
-            # since the user confirmed Q's line-and-quotation worked.
-            # If the next block is a photo, keep the current behavior.
-            # Otherwise click below the quotation so prose/A. is not typed
-            # inside the quotation frame.
-            if next_kind != 'image':
-                check_control(pause_event,stop_event)
-                click_below_intro_quote(body_point,quote_exit_offset,notify)
-        else:
-            # The first prose block starts at the clicked location outside the
-            # quotation; inserting Enter here could return to the quote.
-            if previous not in (None,'image','hero_quote','question','final_quote'):
-                pyautogui.press('enter')
-            type_unicode_text(b['value'],pause_event=pause_event,stop_event=stop_event)
-        previous=kind
-        notify(f'입력 중: {i+1}/{len(data["blocks"])}')
-    notify('입력 완료 — 인용구 뒤 본문 분리, 마지막 프레임, 사진 다음 A. 위치를 확인하세요. 임시저장은 직접 눌러 주세요')
-
-class App:
-    def __init__(self,root):
-        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('760x830')
-        self.folder=tk.StringVar(value=str(ROOT/'예제사진'))
-        self.shop=tk.StringVar(value='의정부 경원식당 의정부역전점')
-        self.menu=tk.StringVar(value='부대찌개')
-        self.api=tk.StringVar(value=os.getenv('OPENAI_API_KEY',''))
-        self.use_ai=tk.BooleanVar(value=False)
-        self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
-        main=ttk.Frame(root,padding=15);main.pack(fill='both',expand=True)
-        ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',18,'bold')).pack(anchor='w',pady=(0,12))
-        for title,var in [('사진 폴더',self.folder),('상호명',self.shop),('대표 메뉴',self.menu)]:
-            row=ttk.Frame(main);row.pack(fill='x',pady=4)
-            ttk.Label(row,text=title,width=12).pack(side='left')
-            ttk.Entry(row,textvariable=var).pack(side='left',fill='x',expand=True)
-            if title=='사진 폴더':ttk.Button(row,text='찾아보기',command=self.choose).pack(side='left',padx=4)
-        ttk.Label(main,text='실제 방문 메모 (맛, 주문 메뉴, 주차 등 직접 확인한 사실만)',padding=(0,8,0,2)).pack(anchor='w')
-        self.notes=tk.Text(main,height=3);self.notes.pack(fill='x')
-        ttk.Label(main,text='꼭 넣고 싶은 문장 (한 줄에 한 문장 · 원문 그대로 반영)',padding=(0,8,0,2)).pack(anchor='w')
-        self.must_include=tk.Text(main,height=3);self.must_include.pack(fill='x')
-        ttk.Label(main,text='강조할 이야기·키워드 (쉼표로 구분 · 예: 가족 외식, 좌석, 재방문)',padding=(0,8,0,2)).pack(anchor='w')
-        self.keywords=tk.Text(main,height=2);self.keywords.pack(fill='x')
-        ttk.Label(main,text='시아애비 말투 참고 글 (선택 · 내가 마음에 든 예전 원고 일부를 붙여넣기)',padding=(0,8,0,2)).pack(anchor='w')
-        self.style_sample=tk.Text(main,height=4);self.style_sample.pack(fill='x')
-        self.style_sample.insert('1.0', load_style_sample())
-        ttk.Button(main,text='말투 예시 저장',command=self.save_style_sample).pack(anchor='e',pady=(2,3))
-        ttk.Checkbutton(main,text='AI가 사진을 보고 시아애비 스타일 원고 생성 (GPT-4.1 API · 별도 비용)',variable=self.use_ai).pack(anchor='w',pady=(12,4))
-        ttk.Label(main,text='※ 사진에 맞는 자연스러운 Q&A는 위 AI 옵션을 켜야 생성됩니다. 미사용 시 임시 질문으로 작성됩니다.',foreground='#8a5312').pack(anchor='w')
-        row=ttk.Frame(main);row.pack(fill='x')
-        ttk.Label(row,text='API 키',width=12).pack(side='left')
-        ttk.Entry(row,textvariable=self.api,show='*').pack(side='left',fill='x',expand=True)
-        ttk.Label(main,text='키는 이 프로그램에서 서버에 저장하지 않습니다. API 사용 시 사진이 OpenAI로 전송됩니다.',foreground='#666').pack(anchor='w',pady=5)
-        buttons=ttk.Frame(main);buttons.pack(fill='x',pady=12)
-        ttk.Button(buttons,text='① 원고 생성',command=self.generate).pack(side='left',padx=3)
-        ttk.Button(buttons,text='② 사진 포함 미리보기',command=self.preview).pack(side='left',padx=3)
-        ttk.Button(buttons,text='③ 네이버 입력 시작',command=self.naver).pack(side='left',padx=3)
-        ttk.Button(main,text='ChatGPT 원고 붙여넣기 적용 (사진 번호/파일명 자동 연결)',command=self.apply_pasted_draft).pack(anchor='w',pady=(0,4))
-        self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin,state='disabled');self.go.pack(side='left',padx=3)
-        self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
-        self.stop_button=ttk.Button(buttons,text='중지 (F9)',command=self.stop_input,state='disabled');self.stop_button.pack(side='left',padx=3)
-        saved_positions = load_editor_positions()
-        for field in POSITION_FIELDS:
-            setattr(self, field, saved_positions.get(field))
-        self.quote_exit_offset=tk.IntVar(value=saved_positions.get('quote_exit_offset',500))
-        self.quote_exit_offset.trace_add('write', self.save_positions_if_valid)
-        ttk.Label(main,text='전역 단축키: F7 입력 시작 · F8 일시정지/이어쓰기 · F9 중지',foreground='#175b80').pack(anchor='w')
-        ttk.Button(main,text='네이버 사진 버튼 위치 지정 (5초)',command=self.capture_photo_button).pack(anchor='w',pady=(0,5))
-        ttk.Button(main,text='본문 시작 위치 지정 (5초)',command=lambda:self.capture_point('body_point','본문 첫 줄 입력 위치')).pack(anchor='w')
-        ttk.Button(main,text='인용구 메뉴 버튼 지정 (5초)',command=lambda:self.capture_point('quote_button','네이버 인용구 메뉴 버튼')).pack(anchor='w')
-        ttk.Button(main,text='부제목용 따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('subtitle_quote_style','펼쳐진 인용구 메뉴의 따옴표 스타일')).pack(anchor='w')
-        ttk.Button(main,text='Q용 라인&따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('question_quote_style','펼쳐진 인용구 메뉴의 네 번째 라인&따옴표 스타일')).pack(anchor='w')
-        ttk.Button(main,text='마지막 Q용 프레임 스타일 지정 (5초)',command=lambda:self.capture_point('final_quote_style','펼쳐진 인용구 메뉴의 프레임 스타일')).pack(anchor='w')
-        exit_row=ttk.Frame(main);exit_row.pack(fill='x',pady=(5,0))
-        ttk.Label(exit_row,text='인용구 아래 클릭 거리 (px)').pack(side='left')
-        ttk.Spinbox(exit_row,from_=100,to=1500,increment=25,width=7,textvariable=self.quote_exit_offset).pack(side='left',padx=(8,6))
-        ttk.Label(exit_row,text='기본 500 · 본문 첫 줄 좌표 기준 · 화면 배율이 바뀌면 재조정',foreground='#5d6870').pack(side='left')
-
-        positions_row=ttk.Frame(main);positions_row.pack(fill='x',pady=(4,4))
-        ttk.Label(positions_row,text='위치 설정은 자동 저장되며 다음 실행과 새 버전에서도 불러옵니다',foreground='#175b80').pack(side='left')
-        ttk.Button(positions_row,text='위치 설정 초기화',command=self.reset_positions).pack(side='right')
-        self.set_saved_positions_status()
-
-        ttk.Button(main,text='업데이트 확인',command=self.update_info).pack(anchor='e',pady=(0,4))
-        ttk.Label(main,text='모바일 폭 미리보기 (글 왼쪽 / 사진 가운데 / Q → 사진 → A. → 답변)',font=('맑은 고딕',10,'bold')).pack(anchor='w')
-        self.view=tk.Text(main,height=14,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
-        self.status=tk.StringVar(value='준비 완료. 먼저 원고 생성을 누르세요.')
-        ttk.Label(main,textvariable=self.status,wraplength=700,foreground='#175b80').pack(anchor='w',pady=7)
-        ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 사진 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
-    def set_saved_positions_status(self):
-        count = sum(getattr(self, field) is not None for field in POSITION_FIELDS)
-        self.status_saved = getattr(self, 'status_saved', tk.StringVar())
-        self.status_saved.set(f'저장된 위치: {count}/6 · 설정 경로: {CONFIG_PATH}')
-        if not hasattr(self, '_saved_label'):
-            self._saved_label=ttk.Label(self.root, textvariable=self.status_saved,
-                                        foreground='#175b80',wraplength=700)
-            # Status shown at bottom, without disturbing existing controls
-            self._saved_label.pack(side='bottom',anchor='w',padx=15,pady=(0,4))
-
-    def save_positions_if_valid(self,*_):
-        try:
-            offset=int(self.quote_exit_offset.get())
-            if not 100 <= offset <= 1500:return
-            save_editor_positions(self)
-        except (ValueError, tk.TclError, OSError):
-            pass
-
-    def reset_positions(self):
-        if not messagebox.askyesno('위치 초기화','저장된 사진/본문/인용구 버튼 위치를 모두 초기화할까요?'):return
-        for field in POSITION_FIELDS:setattr(self,field,None)
-        self.quote_exit_offset.set(500)
-        self.save_positions_if_valid()
-        self.set_saved_positions_status()
-        self.setstatus('위치 설정 초기화 완료 — 다음 입력 전 다시 위치를 지정해 주세요')
-
-    def capture_point(self,field,description):
-        messagebox.showinfo('위치 지정',f'확인을 누른 후 5초 안에 마우스를 [{description}] 위에 올려두세요\\n클릭하지 마세요\\n인용구 스타일 지정 시에는 먼저 네이버에서 인용구 메뉴를 펼쳐 두세요')
-        self.setstatus('5초 뒤 '+description+' 위치를 저장합니다')
-        def work():
-            import pyautogui
-            time.sleep(5)
-            pos=pyautogui.position()
-            setattr(self,field,(pos.x,pos.y))
-            self.save_positions_if_valid()
-            self.root.after(0,self.set_saved_positions_status)
-            self.setstatus(description+f' 위치 저장: {(pos.x,pos.y)}')
-        threading.Thread(target=work,daemon=True).start()
-
-    def capture_photo_button(self):
-        messagebox.showinfo('사진 버튼 위치 지정','확인을 누른 뒤 5초 안에 네이버 글쓰기 화면의 상단 [사진] 첨부 버튼 위로 마우스를 이동하고 그대로 두세요. 클릭하지 마세요.')
-        self.setstatus('5초 뒤 마우스 위치를 사진 첨부 버튼으로 저장합니다.')
-        def capture():
-            import pyautogui
-            time.sleep(5)
-            pos=pyautogui.position()
-            self.photo_button=(pos.x,pos.y)
-            self.save_positions_if_valid()
-            self.root.after(0,self.set_saved_positions_status)
-            self.setstatus(f'사진 첨부 버튼 위치 저장: {self.photo_button}. 브라우저 창 위치/크기를 바꾸지 마세요.')
-        threading.Thread(target=capture,daemon=True).start()
-    def update_info(self):
-        if self.running:
-            messagebox.showwarning('업데이트', '네이버 자동 입력이 끝난 뒤 업데이트해 주세요.')
-            return
-        self.setstatus('GitHub 최신 버전 확인 중...')
-        def work():
-            try:
-                tag, assets = latest_release()
-                if version_parts(tag) <= version_parts(APP_VERSION):
-                    self.root.after(0, lambda: messagebox.showinfo('업데이트 확인',
-                        f'현재 버전 {APP_VERSION}이 최신입니다.\\nGitHub 최신 배포: {tag}'))
-                    self.setstatus('최신 버전 사용 중')
-                    return
-                def confirm():
-                    if not messagebox.askyesno('업데이트 확인',
-                            f'현재 {APP_VERSION} → 최신 {tag}\n\n다운로드하고 프로그램을 재시작할까요?\n저장된 좌표는 유지됩니다.'):
-                        self.setstatus('업데이트 취소')
-                        return
-                    self.setstatus('업데이트 다운로드 및 검증 중...')
-                    threading.Thread(target=download_and_start, args=(assets,), daemon=True).start()
-                self.root.after(0, confirm)
-            except urllib.error.HTTPError as e:
-                msg = ('아직 GitHub Releases에 배포된 버전이 없습니다.\n'
-                       '저장소의 Releases에서 첫 배포를 등록해야 합니다.') if e.code == 404 else str(e)
-                self.root.after(0, lambda m=msg: messagebox.showerror('업데이트 확인 실패', m))
-                self.setstatus('업데이트 확인 실패')
-            except Exception as e:
-                msg = str(e)
-                self.root.after(0, lambda m=msg: messagebox.showerror('업데이트 확인 실패', m))
-                self.setstatus('업데이트 확인 실패')
-        def download_and_start(assets):
-            try:
-                archive = prepare_update(assets)
-                if not getattr(sys, 'frozen', False):
-                    raise RuntimeError('이 버전의 업데이트는 EXE로 실행할 때 지원됩니다.')
-                updater = ROOT.parent / 'SiaAebiUpdater.exe'
-                if not updater.is_file():
-                    raise FileNotFoundError('SiaAebiUpdater.exe가 없습니다. 설치 폴더 전체를 유지하세요.')
-                subprocess.Popen([str(updater), '--archive', str(archive),
-                                  '--folder', str(ROOT), '--pid', str(os.getpid())],
-                                 cwd=str(ROOT.parent), creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                self.root.after(0, self.root.destroy)
-            except Exception as e:
-                msg=str(e)
-                self.root.after(0, lambda m=msg: messagebox.showerror('업데이트 설치 실패', m))
-                self.setstatus('업데이트 설치 실패 — 기존 버전 유지')
-        threading.Thread(target=work, daemon=True).start()
-    def save_style_sample(self):
-        try:
-            save_style_sample(self.style_sample.get('1.0','end').strip())
-            self.setstatus('시아애비 말투 예시 저장 완료 (내 PC에만 저장)')
-        except Exception as e:
-            messagebox.showerror('말투 저장 오류',str(e))
-    def choose(self):
-        p=filedialog.askdirectory(initialdir=self.folder.get());
-        if p:self.folder.set(p)
-    def setstatus(self,s):self.root.after(0,lambda:self.status.set(s))
-    def generate(self):
-        try:
-            photos=sorted_photos(self.folder.get())
-            if not photos:raise ValueError('선택한 폴더에 사진이 없습니다.')
-            if self.use_ai.get() and not self.api.get().strip():raise ValueError('API 키를 입력하세요.')
-            self.setstatus('원고 작성 중...')
-            args=(self.shop.get(),self.menu.get(),self.notes.get('1.0','end').strip(),photos,self.must_include.get('1.0','end').strip(),self.keywords.get('1.0','end').strip())
-            style_sample=self.style_sample.get('1.0','end').strip()
-            ai=self.use_ai.get();key=self.api.get().strip()
-            def work():
-                try:
-                    data=clean_data(ai_draft(key,*args,style_sample=style_sample) if ai else default_draft(*args))
-                    out=save_preview(data)
-                    def done():
-                        self.data=data;self.view.delete('1.0','end');self.view.insert('end',data['title']+'\n')
-                        for b in data['blocks']:
-                            self.view.insert('end',(b['value'] if b['type'] in ('text','question','hero_quote','final_quote','answer_label') else ('[인용구] '+b['value'] if b['type']=='hero_quote' else '[사진] '+Path(b['path']).name))+'\n')
-                        self.status.set('원고 생성 완료. 미리보기 파일: '+str(out))
-                    self.root.after(0,done)
-                except Exception as e:self.setstatus('오류: '+str(e))
-            threading.Thread(target=work,daemon=True).start()
-        except Exception as e:messagebox.showerror('확인',str(e))
-    def apply_pasted_draft(self):
-        if self.running:
-            return messagebox.showwarning('확인','자동 입력 중에는 원고를 변경할 수 없습니다.')
-        try:
-            photos=sorted_photos(self.folder.get())
-            raw=self.view.get('1.0','end').strip()
-            data=parse_pasted_draft(raw,photos)
-            self.data=data
-            out=save_preview(data)
-            self.setstatus(f'붙여넣은 원고 적용 완료: 사진 {sum(b["type"]=="image" for b in data["blocks"])}장 연결 · 미리보기: {out}')
-            messagebox.showinfo('원고 적용 완료','사진을 실제 파일에 연결했습니다. 미리보기로 순서를 확인한 후 네이버 입력을 시작하세요.')
-        except Exception as e:
-            messagebox.showerror('원고 적용 실패',str(e))
-
-    def preview(self):
-        if not self.data:return messagebox.showinfo('안내','먼저 원고를 생성하세요.')
-        webbrowser.open(save_preview(self.data).as_uri())
-    def naver(self):
-        if not self.data:return messagebox.showinfo('안내','먼저 원고를 생성하세요.')
-        if not all(getattr(self, field) for field in POSITION_FIELDS):
-            return messagebox.showwarning('확인','사진/본문/인용구 위치가 일부 비어 있습니다. 빠진 위치만 지정하세요')
-        if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n사진 버튼 위치를 미리 지정해야 하며 첨부 메뉴 구조에 따라 실패할 수 있습니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
-        self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
-        threading.Thread(target=self.worker,daemon=True).start()
-    def begin(self):
-        if not self.running or self.event.is_set():return
-        self.go.config(state='disabled');self.event.set()
-    def toggle_pause(self):
-        if not self.running:return
-        if self.pause_event.is_set():
-            self.pause_event.clear()
-            self.pause_button.config(text='이어쓰기')
-            self.setstatus('일시정지됨 — 이어쓰기를 누르면 중단한 글자부터 계속 입력합니다')
-        else:
-            self.pause_event.set()
-            self.pause_button.config(text='일시정지')
-            self.setstatus('입력 재개')
-    def stop_input(self):
-        if not self.running:return
-        self.stop_event.set()
-        self.pause_event.set()
-        self.setstatus('중지 요청됨 — 사진 첨부 작업 중이면 완료 후 멈춥니다')
-
-    def start_hotkeys(self):
-        """Windows 전역 F7/F8/F9. 등록 실패 시 버튼으로 조작."""
-        import ctypes
-        from ctypes import wintypes
-        user32=ctypes.windll.user32
-        registered=[]
-        try:
-            for hotkey_id,vk in ((800,0x76),(801,0x77),(802,0x78)):
-                if user32.RegisterHotKey(None,hotkey_id,0x4000,vk):
-                    registered.append(hotkey_id)
-                else:
-                    self.setstatus(f'F{7 if hotkey_id==800 else (8 if hotkey_id==801 else 9)} 등록 실패 — 다른 앱에서 사용 중일 수 있습니다')
-            msg=wintypes.MSG()
-            while self.running:
-                if user32.PeekMessageW(ctypes.byref(msg),None,0,0,1) and msg.message==0x0312:
-                    if msg.wParam==800 and self.running:self.root.after(0,self.begin)
-                    elif msg.wParam==801 and self.running:self.root.after(0,self.toggle_pause)
-                    elif msg.wParam==802 and self.running:self.root.after(0,self.stop_input)
-                time.sleep(.035)
-        finally:
-            for hotkey_id in registered:user32.UnregisterHotKey(None,hotkey_id)
-
-    def worker(self):
-        def wait():return self.event.wait(300)
-        threading.Thread(target=self.start_hotkeys,daemon=True).start()
-        try:automate_naver(self.data,self.setstatus,wait,self.photo_button,self.body_point,self.quote_button,self.subtitle_quote_style,self.question_quote_style,self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,self.stop_event)
-        except InputCancelled as e:self.setstatus(str(e))
-        except Exception as e:self.setstatus('자동 입력 실패: '+str(e)+' / 미리보기에서 수동 복사해 주세요.')
-        finally:
-            self.running=False;self.pause_event.set()
-            self.root.after(0,lambda:(self.go.config(state='disabled'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
-
-if __name__=='__main__':
-    root=tk.Tk();App(root);root.mainloop(), re.I)
-
-def parse_pasted_draft(raw, photos):
-    """Map human-readable photo markers to real local files; never guess ambiguous names."""
-    if not photos:
-        raise ValueError('먼저 사진이 들어 있는 폴더를 선택하세요.')
-    by_name = {}
-    for p in photos:
-        by_name.setdefault(p.name.casefold(), []).append(p)
-    blocks = []
-    lines = raw.replace('\\r', '').split('\\n')
-    title = ''
-    used = set()
-    buffer = []
+PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
+def parse_pasted_draft(raw,photos):
+    files={p.name.casefold():p for p in photos}
+    blocks=[];buf=[];used=set();title=''
     def flush():
-        if buffer:
-            value = '\\n'.join(buffer).strip()
-            buffer.clear()
-            if value:
-                blocks.append({'type':'text','value':value})
-    for original in lines:
-        line = original.strip()
-        if not line or line == '---':
+        if buf:
+            value='\n'.join(buf).strip()
+            buf.clear()
+            if value:blocks.append({'type':'text','value':value})
+    for original in raw.replace('\r','').split('\n'):
+        line=original.strip()
+        if not line or line=='---':
             flush()
             continue
-        marker = PHOTO_MARKER.fullmatch(line)
-        if marker:
+        match=PHOTO_MARKER.fullmatch(line)
+        if match:
             flush()
-            number, filename = marker.groups()
-            filename = filename.strip()
-            if filename and filename.startswith('—'):
-                filename = ''
-            if filename:
-                matches = by_name.get(Path(filename).name.casefold(), [])
-                if len(matches) != 1:
-                    raise ValueError('사진 파일명을 정확히 찾을 수 없습니다: '+filename)
-                photo = matches[0]
-                if number and (int(number) < 1 or int(number) > len(photos) or photos[int(number)-1] != photo):
-                    raise ValueError('사진 번호와 파일명이 서로 다릅니다: '+line)
+            number,filename=match.groups()
+            if filename.strip():
+                photo=files.get(Path(filename.strip()).name.casefold())
+                if photo is None:raise ValueError('사진 파일 없음: '+filename)
+                if number and (int(number)<1 or int(number)>len(photos) or photos[int(number)-1]!=photo):raise ValueError('사진 번호와 파일명이 다릅니다: '+line)
             elif number:
-                index = int(number)-1
-                if index < 0 or index >= len(photos):
-                    raise ValueError(f'사진 {number}번이 폴더에 없습니다. 총 {len(photos)}장입니다.')
-                photo = photos[index]
-            else:
-                raise ValueError('사진 표시에는 번호 또는 실제 파일명이 필요합니다: '+line)
-            if str(photo) in used:
-                raise ValueError('같은 사진이 두 번 지정되었습니다: '+photo.name)
+                index=int(number)-1
+                if index<0 or index>=len(photos):raise ValueError('사진 번호 오류: '+number)
+                photo=photos[index]
+            else:raise ValueError('사진 번호 또는 파일명 필요: '+line)
+            if str(photo) in used:raise ValueError('중복 사진: '+photo.name)
             used.add(str(photo))
             blocks.append({'type':'image','path':str(photo),'caption':''})
             continue
-        heading = re.sub(r'^#{1,6}\\s*', '', line)
-        if not title and not blocks and not buffer:
-            title = heading
-            continue
-        if re.match(r'^Q\\.\\s*', heading, re.I):
+        heading=re.sub(r'^#{1,6}\s*','',line)
+        if not title and not blocks and not buf:title=heading
+        elif re.match(r'^Q\.\s*',heading,re.I):
             flush()
             blocks.append({'type':'question','value':heading})
-        elif re.fullmatch(r'A\\.', heading, re.I):
+        elif re.fullmatch(r'A\.',heading,re.I):
             flush()
             blocks.append({'type':'answer_label','value':'A.'})
-        else:
-            buffer.append(heading if line.startswith('#') else original)
+        else:buf.append(heading if line.startswith('#') else original)
     flush()
-    if not any(b['type']=='image' for b in blocks):
-        raise ValueError('사진 표시를 찾지 못했습니다. [사진 1 — 설명] 또는 [사진] 파일명.jpg 형식을 사용하세요.')
-    return clean_data({'title':title or '시아애비 맛집 방문 후기','blocks':blocks})
+    if not blocks:raise ValueError('원고를 입력하세요.')
+    return clean_data({'title':title or '시아애비 방문 후기','blocks':blocks})
 
 def default_draft(shop, menu, notes, photos, must_include="", keywords=""):
     """Without image analysis, don't fabricate photo-specific Q&A or repeat filler."""
@@ -1234,7 +598,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
 
 class App:
     def __init__(self,root):
-        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('760x830')
+        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('900x750')
         self.folder=tk.StringVar(value=str(ROOT/'예제사진'))
         self.shop=tk.StringVar(value='의정부 경원식당 의정부역전점')
         self.menu=tk.StringVar(value='부대찌개')
@@ -1248,27 +612,34 @@ class App:
             ttk.Label(row,text=title,width=12).pack(side='left')
             ttk.Entry(row,textvariable=var).pack(side='left',fill='x',expand=True)
             if title=='사진 폴더':ttk.Button(row,text='찾아보기',command=self.choose).pack(side='left',padx=4)
-        ttk.Label(main,text='실제 방문 메모 (맛, 주문 메뉴, 주차 등 직접 확인한 사실만)',padding=(0,8,0,2)).pack(anchor='w')
-        self.notes=tk.Text(main,height=3);self.notes.pack(fill='x')
-        ttk.Label(main,text='꼭 넣고 싶은 문장 (한 줄에 한 문장 · 원문 그대로 반영)',padding=(0,8,0,2)).pack(anchor='w')
-        self.must_include=tk.Text(main,height=3);self.must_include.pack(fill='x')
-        ttk.Label(main,text='강조할 이야기·키워드 (쉼표로 구분 · 예: 가족 외식, 좌석, 재방문)',padding=(0,8,0,2)).pack(anchor='w')
-        self.keywords=tk.Text(main,height=2);self.keywords.pack(fill='x')
-        ttk.Label(main,text='시아애비 말투 참고 글 (선택 · 내가 마음에 든 예전 원고 일부를 붙여넣기)',padding=(0,8,0,2)).pack(anchor='w')
-        self.style_sample=tk.Text(main,height=4);self.style_sample.pack(fill='x')
+        self.notes=tk.Text(main,height=1)
+        advanced=ttk.LabelFrame(main,text='AI 원고 설정')
+        self.advanced_open=tk.BooleanVar(value=False)
+        def toggle_advanced():
+            if self.advanced_open.get():advanced.pack(fill='x',after=advanced_toggle)
+            else:advanced.pack_forget()
+        advanced_toggle=ttk.Checkbutton(main,text='AI 원고 설정 펼치기',variable=self.advanced_open,command=toggle_advanced)
+        advanced_toggle.pack(anchor='w')
+        ttk.Label(advanced,text='꼭 넣고 싶은 문장 (한 줄에 한 문장 · 원문 그대로 반영)',padding=(0,8,0,2)).pack(anchor='w')
+        self.must_include=tk.Text(advanced,height=2);self.must_include.pack(fill='x')
+        ttk.Label(advanced,text='강조할 이야기·키워드 (쉼표로 구분 · 예: 가족 외식, 좌석, 재방문)',padding=(0,8,0,2)).pack(anchor='w')
+        self.keywords=tk.Text(advanced,height=2);self.keywords.pack(fill='x')
+        ttk.Label(advanced,text='시아애비 말투 참고 글 (선택 · 내가 마음에 든 예전 원고 일부를 붙여넣기)',padding=(0,8,0,2)).pack(anchor='w')
+        self.style_sample=tk.Text(advanced,height=2);self.style_sample.pack(fill='x')
         self.style_sample.insert('1.0', load_style_sample())
-        ttk.Button(main,text='말투 예시 저장',command=self.save_style_sample).pack(anchor='e',pady=(2,3))
-        ttk.Checkbutton(main,text='AI가 사진을 보고 시아애비 스타일 원고 생성 (GPT-4.1 API · 별도 비용)',variable=self.use_ai).pack(anchor='w',pady=(12,4))
-        ttk.Label(main,text='※ 사진에 맞는 자연스러운 Q&A는 위 AI 옵션을 켜야 생성됩니다. 미사용 시 임시 질문으로 작성됩니다.',foreground='#8a5312').pack(anchor='w')
-        row=ttk.Frame(main);row.pack(fill='x')
+        ttk.Button(advanced,text='말투 예시 저장',command=self.save_style_sample).pack(anchor='e',pady=(2,3))
+        ttk.Checkbutton(advanced,text='AI가 사진을 보고 시아애비 스타일 원고 생성 (GPT-4.1 API · 별도 비용)',variable=self.use_ai).pack(anchor='w',pady=(12,4))
+        ttk.Label(advanced,text='※ 사진에 맞는 자연스러운 Q&A는 위 AI 옵션을 켜야 생성됩니다. 미사용 시 임시 질문으로 작성됩니다.',foreground='#8a5312').pack(anchor='w')
+        row=ttk.Frame(advanced);row.pack(fill='x')
         ttk.Label(row,text='API 키',width=12).pack(side='left')
         ttk.Entry(row,textvariable=self.api,show='*').pack(side='left',fill='x',expand=True)
-        ttk.Label(main,text='키는 이 프로그램에서 서버에 저장하지 않습니다. API 사용 시 사진이 OpenAI로 전송됩니다.',foreground='#666').pack(anchor='w',pady=5)
+        ttk.Label(advanced,text='키는 이 프로그램에서 서버에 저장하지 않습니다. API 사용 시 사진이 OpenAI로 전송됩니다.',foreground='#666').pack(anchor='w',pady=5)
         buttons=ttk.Frame(main);buttons.pack(fill='x',pady=12)
         ttk.Button(buttons,text='① 원고 생성',command=self.generate).pack(side='left',padx=3)
         ttk.Button(buttons,text='② 사진 포함 미리보기',command=self.preview).pack(side='left',padx=3)
         ttk.Button(buttons,text='③ 네이버 입력 시작',command=self.naver).pack(side='left',padx=3)
-        self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin,state='disabled');self.go.pack(side='left',padx=3)
+        ttk.Button(buttons,text='원고 적용',command=self.apply_pasted_draft).pack(side='left',padx=3)
+        self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin);self.go.pack(side='left',padx=3)
         self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
         self.stop_button=ttk.Button(buttons,text='중지 (F9)',command=self.stop_input,state='disabled');self.stop_button.pack(side='left',padx=3)
         saved_positions = load_editor_positions()
@@ -1277,26 +648,33 @@ class App:
         self.quote_exit_offset=tk.IntVar(value=saved_positions.get('quote_exit_offset',500))
         self.quote_exit_offset.trace_add('write', self.save_positions_if_valid)
         ttk.Label(main,text='전역 단축키: F7 입력 시작 · F8 일시정지/이어쓰기 · F9 중지',foreground='#175b80').pack(anchor='w')
-        ttk.Button(main,text='네이버 사진 버튼 위치 지정 (5초)',command=self.capture_photo_button).pack(anchor='w',pady=(0,5))
-        ttk.Button(main,text='본문 시작 위치 지정 (5초)',command=lambda:self.capture_point('body_point','본문 첫 줄 입력 위치')).pack(anchor='w')
-        ttk.Button(main,text='인용구 메뉴 버튼 지정 (5초)',command=lambda:self.capture_point('quote_button','네이버 인용구 메뉴 버튼')).pack(anchor='w')
-        ttk.Button(main,text='부제목용 따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('subtitle_quote_style','펼쳐진 인용구 메뉴의 따옴표 스타일')).pack(anchor='w')
-        ttk.Button(main,text='Q용 라인&따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('question_quote_style','펼쳐진 인용구 메뉴의 네 번째 라인&따옴표 스타일')).pack(anchor='w')
-        ttk.Button(main,text='마지막 Q용 프레임 스타일 지정 (5초)',command=lambda:self.capture_point('final_quote_style','펼쳐진 인용구 메뉴의 프레임 스타일')).pack(anchor='w')
-        exit_row=ttk.Frame(main);exit_row.pack(fill='x',pady=(5,0))
+        positions_panel=ttk.LabelFrame(main,text='네이버 위치 설정')
+        self.positions_open=tk.BooleanVar(value=False)
+        def toggle_positions():
+            if self.positions_open.get():positions_panel.pack(fill='x',after=positions_toggle)
+            else:positions_panel.pack_forget()
+        positions_toggle=ttk.Checkbutton(main,text='네이버 위치 설정 펼치기',variable=self.positions_open,command=toggle_positions)
+        positions_toggle.pack(anchor='w')
+        ttk.Button(positions_panel,text='네이버 사진 버튼 위치 지정 (5초)',command=self.capture_photo_button).pack(anchor='w',pady=(0,5))
+        ttk.Button(positions_panel,text='본문 시작 위치 지정 (5초)',command=lambda:self.capture_point('body_point','본문 첫 줄 입력 위치')).pack(anchor='w')
+        ttk.Button(positions_panel,text='인용구 메뉴 버튼 지정 (5초)',command=lambda:self.capture_point('quote_button','네이버 인용구 메뉴 버튼')).pack(anchor='w')
+        ttk.Button(positions_panel,text='부제목용 따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('subtitle_quote_style','펼쳐진 인용구 메뉴의 따옴표 스타일')).pack(anchor='w')
+        ttk.Button(positions_panel,text='Q용 라인&따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('question_quote_style','펼쳐진 인용구 메뉴의 네 번째 라인&따옴표 스타일')).pack(anchor='w')
+        ttk.Button(positions_panel,text='마지막 Q용 프레임 스타일 지정 (5초)',command=lambda:self.capture_point('final_quote_style','펼쳐진 인용구 메뉴의 프레임 스타일')).pack(anchor='w')
+        exit_row=ttk.Frame(positions_panel);exit_row.pack(fill='x',pady=(5,0))
         ttk.Label(exit_row,text='인용구 아래 클릭 거리 (px)').pack(side='left')
         ttk.Spinbox(exit_row,from_=100,to=1500,increment=25,width=7,textvariable=self.quote_exit_offset).pack(side='left',padx=(8,6))
         ttk.Label(exit_row,text='기본 500 · 본문 첫 줄 좌표 기준 · 화면 배율이 바뀌면 재조정',foreground='#5d6870').pack(side='left')
 
-        positions_row=ttk.Frame(main);positions_row.pack(fill='x',pady=(4,4))
+        positions_row=ttk.Frame(positions_panel);positions_row.pack(fill='x',pady=(4,4))
         ttk.Label(positions_row,text='위치 설정은 자동 저장되며 다음 실행과 새 버전에서도 불러옵니다',foreground='#175b80').pack(side='left')
         ttk.Button(positions_row,text='위치 설정 초기화',command=self.reset_positions).pack(side='right')
         self.set_saved_positions_status()
 
         ttk.Button(main,text='업데이트 확인',command=self.update_info).pack(anchor='e',pady=(0,4))
         ttk.Label(main,text='모바일 폭 미리보기 (글 왼쪽 / 사진 가운데 / Q → 사진 → A. → 답변)',font=('맑은 고딕',10,'bold')).pack(anchor='w')
-        self.view=tk.Text(main,height=14,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
-        self.status=tk.StringVar(value='준비 완료. 먼저 원고 생성을 누르세요.')
+        self.view=tk.Text(main,height=24,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
+        self.status=tk.StringVar(value='원고를 붙여넣고 미리보기 또는 입력을 누르세요.')
         ttk.Label(main,textvariable=self.status,wraplength=700,foreground='#175b80').pack(anchor='w',pady=7)
         ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 사진 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
     def set_saved_positions_status(self):
@@ -1429,18 +807,31 @@ class App:
                 except Exception as e:self.setstatus('오류: '+str(e))
             threading.Thread(target=work,daemon=True).start()
         except Exception as e:messagebox.showerror('확인',str(e))
+    def current_draft(self):
+        raw=self.view.get('1.0','end').strip()
+        if not raw:raise ValueError('원고를 붙여넣어 주세요.')
+        return parse_pasted_draft(raw,sorted_photos(self.folder.get()))
+    def apply_pasted_draft(self):
+        try:self.data=self.current_draft();self.setstatus('현재 원고 적용 완료')
+        except Exception as e:messagebox.showerror('원고 확인',str(e))
     def preview(self):
-        if not self.data:return messagebox.showinfo('안내','먼저 원고를 생성하세요.')
-        webbrowser.open(save_preview(self.data).as_uri())
+        try:
+            self.data=self.current_draft()
+            webbrowser.open(save_preview(self.data).as_uri())
+        except Exception as e:messagebox.showerror('미리보기 실패',str(e))
     def naver(self):
-        if not self.data:return messagebox.showinfo('안내','먼저 원고를 생성하세요.')
+        try:self.data=self.current_draft()
+        except Exception as e:return messagebox.showerror('원고 확인',str(e))
         if not all(getattr(self, field) for field in POSITION_FIELDS):
             return messagebox.showwarning('확인','사진/본문/인용구 위치가 일부 비어 있습니다. 빠진 위치만 지정하세요')
         if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n사진 버튼 위치를 미리 지정해야 하며 첨부 메뉴 구조에 따라 실패할 수 있습니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
         self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
     def begin(self):
-        if not self.running or self.event.is_set():return
+        if not self.running:
+            self.naver()
+            if not self.running:return
+        if self.event.is_set():return
         self.go.config(state='disabled');self.event.set()
     def toggle_pause(self):
         if not self.running:return
@@ -1488,7 +879,7 @@ class App:
         except Exception as e:self.setstatus('자동 입력 실패: '+str(e)+' / 미리보기에서 수동 복사해 주세요.')
         finally:
             self.running=False;self.pause_event.set()
-            self.root.after(0,lambda:(self.go.config(state='disabled'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
+            self.root.after(0,lambda:(self.go.config(state='normal'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
 
 if __name__=='__main__':
     root=tk.Tk();App(root);root.mainloop()
