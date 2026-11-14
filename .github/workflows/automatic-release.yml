@@ -56,9 +56,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          gh release view "$env:VERSION" --json tagName 2>$null
-          if ($LASTEXITCODE -eq 0) {
+          $releases = gh release list --json tagName --limit 100 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Cannot check existing releases" }
+          if (@($releases | Where-Object { $_.tagName -eq $env:VERSION }).Count -gt 0) {
             "exists=true" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           } else {
             "exists=false" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
@@ -70,7 +70,7 @@ jobs:
           python -m pip install --upgrade pip pyinstaller
           python -m pip install -r requirements.txt
       - name: Build EXEs
-        if: steps.existing.outputs.exists == 'false'
+        if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name SiaAebiBlogWriter --collect-all playwright --collect-all PIL app.py
@@ -78,7 +78,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --onefile --name SiaAebiUpdater exe_updater.py
           if ($LASTEXITCODE -ne 0) { throw 'Updater build failed' }
       - name: Package and verify update
-        if: steps.existing.outputs.exists == 'false'
+        if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force SiaAebi_Install/app | Out-Null
