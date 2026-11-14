@@ -677,6 +677,7 @@ class App:
         self.status=tk.StringVar(value='원고를 붙여넣고 미리보기 또는 입력을 누르세요.')
         ttk.Label(main,textvariable=self.status,wraplength=700,foreground='#175b80').pack(anchor='w',pady=7)
         ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 사진 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
+        threading.Thread(target=self.start_hotkeys,daemon=True).start()
     def set_saved_positions_status(self):
         count = sum(getattr(self, field) is not None for field in POSITION_FIELDS)
         self.status_saved = getattr(self, 'status_saved', tk.StringVar())
@@ -862,9 +863,9 @@ class App:
                 else:
                     self.setstatus(f'F{7 if hotkey_id==800 else (8 if hotkey_id==801 else 9)} 등록 실패 — 다른 앱에서 사용 중일 수 있습니다')
             msg=wintypes.MSG()
-            while self.running:
+            while True:
                 if user32.PeekMessageW(ctypes.byref(msg),None,0,0,1) and msg.message==0x0312:
-                    if msg.wParam==800 and self.running:self.root.after(0,self.begin)
+                    if msg.wParam==800:self.root.after(0,self.begin)
                     elif msg.wParam==801 and self.running:self.root.after(0,self.toggle_pause)
                     elif msg.wParam==802 and self.running:self.root.after(0,self.stop_input)
                 time.sleep(.035)
@@ -873,7 +874,6 @@ class App:
 
     def worker(self):
         def wait():return self.event.wait(300)
-        threading.Thread(target=self.start_hotkeys,daemon=True).start()
         try:automate_naver(self.data,self.setstatus,wait,self.photo_button,self.body_point,self.quote_button,self.subtitle_quote_style,self.question_quote_style,self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,self.stop_event)
         except InputCancelled as e:self.setstatus(str(e))
         except Exception as e:self.setstatus('자동 입력 실패: '+str(e)+' / 미리보기에서 수동 복사해 주세요.')
