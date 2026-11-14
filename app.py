@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.3'
+APP_VERSION = 'v18.4'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -146,12 +146,10 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
             q=re.sub(r'^Q\.?\s*','',valid[i]['q'],flags=re.I).strip()
             a=re.sub(r'^A\.?\s*','',valid[i]['a'],flags=re.I).strip()
         else:
-            q=_safe_question(photo_topic(photo,i),i,menu)
-            a=(f'이 장면도 {shop}에서 남겨둔 기록이에요\n\n'
-               '사진에 담긴 구체적인 내용은 직접 확인해 주세요')
+            raise ValueError('사진에 맞는 질문과 답변을 생성하지 못했습니다. AI 원고를 다시 생성해 주세요.')
         if not q or re.search(r'방문\s*사진\s*\d+|사진\s*\d+|\bIMG[_ ]?\d+',q,re.I):
             q=_safe_question('',i,menu)
-        if not a: a='이 장면에서 어떤 점이 기억에 남았는지 방문 메모를 덧붙이면 더 자연스러워져요'
+        if not a: raise ValueError('답변이 비어 있습니다. AI 원고를 다시 생성해 주세요.')
         blocks.extend([{'type':'question','value':'Q. '+q},
                        {'type':'image','path':str(photo),'caption':''},
                        {'type':'answer_label','value':'A.'},
@@ -216,7 +214,20 @@ def clean_data(data):
     return data
 
 def default_draft(shop, menu, notes, photos, must_include="", keywords=""):
-    return compose(shop,menu,notes,photos,must_include=must_include,keywords=keywords)
+    """Without image analysis, don't fabricate photo-specific Q&A or repeat filler."""
+    shop=shop.strip() or '방문한 곳'
+    menu=menu.strip() or '메뉴'
+    blocks=[{'type':'hero_quote','value':shop}]
+    if notes.strip():
+        blocks.append({'type':'text','value':notes.strip()})
+    else:
+        blocks.append({'type':'text','value':'방문 후기를 작성하려면 실제 방문 메모를 적어 주세요'})
+    for photo in photos:
+        blocks.append({'type':'image','path':str(photo),'caption':''})
+    if must_include.strip():
+        blocks.append({'type':'text','value':must_include.strip()})
+    blocks.append({'type':'text','value':'지금까지 시아애비였습니다! ❤️'})
+    return {'title':make_hook_title(shop,menu),'blocks':blocks}
 
 
 def ai_draft(api_key, shop, menu, notes, photos, must_include="", keywords="", style_sample=""):
@@ -231,7 +242,7 @@ def ai_draft(api_key, shop, menu, notes, photos, must_include="", keywords="", s
         "사진의 순서를 유지하면서 실제 사람이 방문해 소개하는 것처럼 유기적으로 이어지는 후기를 써 주세요. "
         "글은 독자가 편하게 읽을 수 있는 친근한 존댓말이고, 말끝은 ~했어요, ~더라고요, ㅎㅎ 등을 지나치지 않게 섞으세요. "
         "사진마다 Q&A를 만들되 사진 자체에 대한 의미 없는 질문은 절대 금지합니다. "
-        "금지 예: 방문 사진 1, 사진으로 보시죠, 사진에는 무엇이 있을까요, 다음 사진은, 이번 사진에서 보이는 것은. "
+        "금지 예: 방문 사진 1, 사진으로 보시죠, 사진에는 무엇이 있을까요, 다음 사진은, 이번 사진에서 보이는 것은, 이 장면, 이 장면도, 남겨둔 기록, 사진에 담긴 구체적인 내용은 직접 확인해 주세요. "
         "독자가 해당 방문 장소에 대해 실제로 궁금해할 질문을 사진에 드러난 구체적인 내용과 앞뒤 맥락에서 고르세요. "
         "반복되는 문장 시작, 뻔한 광고 표현, 과한 느낌표, 로봇처럼 나열하는 문체를 제거하세요. "
         "한 질문에 대한 답변은 2~4문장으로 리듬감 있게 쓰되 사진 설명만 나열하지 말고 방문 이야기가 자연스럽게 이어지도록 하세요. "
@@ -542,7 +553,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
 
 class App:
     def __init__(self,root):
-        self.root=root;root.title('시아애비 블로그 자동작성기 v18.2');root.geometry('760x830')
+        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('760x830')
         self.folder=tk.StringVar(value=str(ROOT/'예제사진'))
         self.shop=tk.StringVar(value='의정부 경원식당 의정부역전점')
         self.menu=tk.StringVar(value='부대찌개')
