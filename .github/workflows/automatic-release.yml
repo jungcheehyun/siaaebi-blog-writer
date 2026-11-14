@@ -49,13 +49,15 @@ jobs:
               print('version=' + versions[0], file=f)
           '@ | python -
       - name: Check whether version already exists
+        if: github.event_name != 'pull_request'
         id: existing
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release view "$env:VERSION" --json tagName *> $null
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view "$env:VERSION" --json tagName 2>$null
           if ($LASTEXITCODE -eq 0) {
             "exists=true" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           } else {
