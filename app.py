@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.2'
+APP_VERSION = 'v18.3'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -62,6 +62,18 @@ CONFIG_PATH = CONFIG_DIR / 'editor_positions.json'
 POSITION_FIELDS = ('photo_button', 'body_point', 'quote_button',
                    'subtitle_quote_style', 'question_quote_style', 'final_quote_style')
 
+STYLE_SAMPLE_PATH = CONFIG_DIR / 'style_sample.txt'
+
+def load_style_sample():
+    try:
+        return STYLE_SAMPLE_PATH.read_text(encoding='utf-8')[:4500]
+    except OSError:
+        return ''
+
+def save_style_sample(value):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    STYLE_SAMPLE_PATH.write_text(value[:4500], encoding='utf-8')
+
 def load_editor_positions():
     try:
         data = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
@@ -113,14 +125,17 @@ def _safe_question(subject, position, menu):
     return options[position % len(options)]
 
 
-def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1500, must_include="", keywords=""):
+def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1500, must_include="", keywords="", ai_intro=None, ai_closing=None):
     """Preserve photo order; ground claims in user notes or AI image interpretation."""
     shop=shop.strip() or '오늘의 맛집'
     menu=menu.strip() or '대표 메뉴'
     intro=(f'안녕하세요 여러분\n\n일상과 맛집을 공유하는 시아애비예요\n\n'
            f'오늘은 {shop} 이야기를 들려드리려고 해요\n\n'
            f'{menu}를 중심으로 어떤 곳이었는지 함께 살펴볼게요')
-    if notes.strip(): intro+='\n\n'+notes.strip()
+    if ai_intro and str(ai_intro).strip():
+        intro=str(ai_intro).strip()
+    elif notes.strip():
+        intro+='\n\n'+notes.strip()
     blocks=[{'type':'hero_quote','value':shop},{'type':'text','value':intro}]
     valid=[]
     for section in (sections or []):
@@ -146,6 +161,7 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
     # rather than generating an artificial extra Q&A section.
     closing=(f'오늘은 {shop} 이야기를 전해드렸는데요\n\n'
              f'{menu}가 궁금했던 분들께 조금이나마 도움이 되었으면 좋겠어요')
+    if ai_closing and str(ai_closing).strip(): closing=str(ai_closing).strip()
     if phrases: closing+='\n\n'+'\n'.join(phrases)
     closing+='\n\n다음에도 재미있는 이야기로 찾아올게요\n\n지금까지 시아애비였습니다! ❤️'
     blocks.extend([{'type':'final_quote','value':'Q. 시아애비의 마무리 한마디는요?'},
@@ -203,42 +219,62 @@ def default_draft(shop, menu, notes, photos, must_include="", keywords=""):
     return compose(shop,menu,notes,photos,must_include=must_include,keywords=keywords)
 
 
-def ai_draft(api_key, shop, menu, notes, photos, must_include="", keywords=""):
+def ai_draft(api_key, shop, menu, notes, photos, must_include="", keywords="", style_sample=""):
+    """OpenAI API calls do not have access to this ChatGPT conversation."""
     from openai import OpenAI
     from PIL import Image
     import base64
-    client=OpenAI(api_key=api_key,timeout=180)
-    instruction=(
-        '당신은 한국어 맛집 블로그를 쓰는 시아애비의 편집자입니다. 다음은 작성자의 말투 기준입니다: '
-        '안녕하세요 여러분, 일상과 맛집을 공유하는 시아애비예요, ~더라고요, ~했어요, ~궁금하시죠?, ㅎㅎ. '
-        '너무 광고 같거나 로봇처럼 딱딱한 말투는 피하세요. 짧은 문단과 편안한 존댓말을 사용하세요. '
-        '사진마다 그 사진을 실제로 보고 독자가 궁금해할 법한 구체적인 질문을 만드세요. '
-        '절대로 방문 사진 1, 사진 2, 사진을 소개할게요, 이번 사진은, 사진으로 볼 수 있어요 같은 메타 질문/설명을 쓰지 마세요. '
-        '예: 음식이 보이면 어떤 재료가 들어갔을까요?, 외관이 보이면 찾기 쉬운 곳일까요?, '
-        '좌석이 보이면 내부 분위기는 어떨까요?처럼 사진에 맞게 다르게 작성하세요. '
-        'Q&A를 유지하되 답변은 정보 나열이 아니라 자연스럽게 이어지는 방문 후기처럼 쓰세요. '
-        '사진에 없는 사실(맛, 가격, 주차, 서비스, 실제 방문 경험)은 사용자 메모에 근거가 없으면 꾸며내지 마세요. '
-        '보이는 사실과 개인적 감상은 구별하세요. 질문과 답변에 같은 표현을 반복하지 마세요. '
-        '각 답변은 90~170자 내외로 충분히 풍부하게 작성하고 불필요한 수식어로 분량을 채우지 마세요. '
-        '문장 끝 마침표는 사용하지 마세요. 사용자가 제공한 필수 문구는 프로그램이 마무리에 그대로 넣으므로 중복하지 마세요. '
-        '키워드는 근거가 있는 경우에만 자연스럽게 녹이세요. '
-        '사진 입력 순서 그대로 각 사진에 대응하는 sections를 정확히 하나씩 만드세요. '
-        'JSON 객체만 반환: {"title":"짧은 제목","sections":[{"q":"자연스러운 질문","a":"자연스러운 답변"}]}\n'
-        f'상호명: {shop}\n대표 메뉴: {menu}\n방문 메모: {notes}\n'
-        f'필수 문구: {must_include}\n강조 키워드: {keywords}\n사진 수: {len(photos)}')
-    content=[{'type':'text','text':instruction}]
-    for i,p in enumerate(photos):
+
+    client = OpenAI(api_key=api_key, timeout=180)
+    instruction = (
+        "당신은 자연스러운 한국어 맛집 블로그의 전문 공동 작가입니다. 필명은 시아애비입니다. "
+        "사진의 순서를 유지하면서 실제 사람이 방문해 소개하는 것처럼 유기적으로 이어지는 후기를 써 주세요. "
+        "글은 독자가 편하게 읽을 수 있는 친근한 존댓말이고, 말끝은 ~했어요, ~더라고요, ㅎㅎ 등을 지나치지 않게 섞으세요. "
+        "사진마다 Q&A를 만들되 사진 자체에 대한 의미 없는 질문은 절대 금지합니다. "
+        "금지 예: 방문 사진 1, 사진으로 보시죠, 사진에는 무엇이 있을까요, 다음 사진은, 이번 사진에서 보이는 것은. "
+        "독자가 해당 방문 장소에 대해 실제로 궁금해할 질문을 사진에 드러난 구체적인 내용과 앞뒤 맥락에서 고르세요. "
+        "반복되는 문장 시작, 뻔한 광고 표현, 과한 느낌표, 로봇처럼 나열하는 문체를 제거하세요. "
+        "한 질문에 대한 답변은 2~4문장으로 리듬감 있게 쓰되 사진 설명만 나열하지 말고 방문 이야기가 자연스럽게 이어지도록 하세요. "
+        "사진으로 알 수 없는 맛, 가격, 주문 경험, 주차, 서비스, 감정, 가족 구성은 임의로 만들어내면 안 됩니다. "
+        "방문 메모는 사용자가 직접 확인한 사실로 존중하지만 필요하다면 문장만 자연스럽게 다듬으세요. "
+        "글투 참고 예시는 문체만 참고하고 그 글에 담긴 가게 정보나 경험을 현재 방문기로 옮기지 마세요. "
+        "도입문(intro)은 2~4문장 정도의 자연스러운 인사와 장소 소개로 직접 작성하세요. "
+        "마무리(closing)는 이 방문에서 확인한 사항을 정리하며 읽는 이에게 도움이 되는 자연스러운 소감으로 쓰세요. "
+        "상호명은 적절히 사용하되 자꾸 반복하지 마세요. 제목은 모바일에서 읽기 좋은 짧은 형태로 작성하세요. "
+        "문장 끝 마침표는 생략하고 친근한 존댓말을 유지하세요. "
+        "필수 문구는 프로그램에서 원문 그대로 삽입하므로 AI는 중복해서 쓰지 마세요. "
+        "사진 수와 sections 개수는 반드시 같아야 하며 사진 순서를 절대 바꾸면 안 됩니다. "
+        "JSON 객체만 반환하세요. 필드: title(문자열), intro(문자열), sections(순서대로 q,a 쌍), closing(문자열).\n"
+        f"상호명: {shop}\n주문/대표 메뉴: {menu}\n직접 방문 메모: {notes}\n"
+        f"필수 문구: {must_include}\n강조 키워드: {keywords}\n사진 수: {len(photos)}\n"
+        f"문체 참고 예시(사실로 사용 금지):\n{style_sample[:4500]}"
+    )
+    content = [{"type": "text", "text": instruction}]
+    for i, p in enumerate(photos):
         with Image.open(p) as im:
-            im.seek(0);im=im.convert('RGB');im.thumbnail((1100,1100))
-            buf=io.BytesIO();im.save(buf,'JPEG',quality=82)
-        content.append({'type':'text','text':f'다음은 순서 {i+1}번 사진입니다. 파일명은 내용에 대한 근거로 사용하지 마세요.'})
-        content.append({'type':'image_url','image_url':{'url':'data:image/jpeg;base64,'+base64.b64encode(buf.getvalue()).decode(),'detail':'high'}})
-    r=client.chat.completions.create(model='gpt-4.1-mini',messages=[{'role':'user','content':content}],response_format={'type':'json_object'})
-    obj=json.loads(r.choices[0].message.content)
-    sections=obj.get('sections',[])
-    if len(sections)!=len(photos):
-        raise ValueError(f'사진은 {len(photos)}장인데 AI가 {len(sections)}개 단락을 작성했습니다. 다시 원고 생성을 눌러주세요.')
-    return compose(shop,menu,notes,photos,sections,obj.get('title'),must_include=must_include,keywords=keywords)
+            im.seek(0)
+            im = im.convert("RGB")
+            im.thumbnail((1100, 1100))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=82)
+        content.append({"type": "text", "text": f"{i+1}번 사진, 이 순서로 질문과 답변을 작성하세요. 파일명은 사진 내용의 근거가 아닙니다."})
+        content.append({"type": "image_url", "image_url": {
+            "url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode(), "detail": "high"}})
+    result = client.chat.completions.create(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": content}],
+        response_format={"type": "json_object"}
+    )
+    raw = result.choices[0].message.content
+    if not raw:
+        raise ValueError("AI에서 원고를 받지 못했습니다. 다시 원고 생성을 눌러 주세요.")
+    obj = json.loads(raw)
+    sections = obj.get("sections", [])
+    if not isinstance(sections, list) or len(sections) != len(photos):
+        raise ValueError(f"사진은 {len(photos)}장인데 생성된 문단이 {len(sections) if isinstance(sections,list) else 0}개입니다. 다시 원고 생성을 눌러 주세요.")
+    return compose(shop, menu, notes, photos, sections, obj.get("title"),
+                   must_include=must_include, keywords=keywords,
+                   ai_intro=obj.get("intro"), ai_closing=obj.get("closing"))
 
 
 def save_preview(data):
@@ -526,7 +562,11 @@ class App:
         self.must_include=tk.Text(main,height=3);self.must_include.pack(fill='x')
         ttk.Label(main,text='강조할 이야기·키워드 (쉼표로 구분 · 예: 가족 외식, 좌석, 재방문)',padding=(0,8,0,2)).pack(anchor='w')
         self.keywords=tk.Text(main,height=2);self.keywords.pack(fill='x')
-        ttk.Checkbutton(main,text='OpenAI API로 사진 분석 및 원고 생성 (별도 API 비용 발생)',variable=self.use_ai).pack(anchor='w',pady=(12,4))
+        ttk.Label(main,text='시아애비 말투 참고 글 (선택 · 내가 마음에 든 예전 원고 일부를 붙여넣기)',padding=(0,8,0,2)).pack(anchor='w')
+        self.style_sample=tk.Text(main,height=4);self.style_sample.pack(fill='x')
+        self.style_sample.insert('1.0', load_style_sample())
+        ttk.Button(main,text='말투 예시 저장',command=self.save_style_sample).pack(anchor='e',pady=(2,3))
+        ttk.Checkbutton(main,text='AI가 사진을 보고 시아애비 스타일 원고 생성 (GPT-4.1 API · 별도 비용)',variable=self.use_ai).pack(anchor='w',pady=(12,4))
         ttk.Label(main,text='※ 사진에 맞는 자연스러운 Q&A는 위 AI 옵션을 켜야 생성됩니다. 미사용 시 임시 질문으로 작성됩니다.',foreground='#8a5312').pack(anchor='w')
         row=ttk.Frame(main);row.pack(fill='x')
         ttk.Label(row,text='API 키',width=12).pack(side='left')
@@ -665,6 +705,12 @@ class App:
                 self.root.after(0, lambda m=msg: messagebox.showerror('업데이트 설치 실패', m))
                 self.setstatus('업데이트 설치 실패 — 기존 버전 유지')
         threading.Thread(target=work, daemon=True).start()
+    def save_style_sample(self):
+        try:
+            save_style_sample(self.style_sample.get('1.0','end').strip())
+            self.setstatus('시아애비 말투 예시 저장 완료 (내 PC에만 저장)')
+        except Exception as e:
+            messagebox.showerror('말투 저장 오류',str(e))
     def choose(self):
         p=filedialog.askdirectory(initialdir=self.folder.get());
         if p:self.folder.set(p)
@@ -676,10 +722,11 @@ class App:
             if self.use_ai.get() and not self.api.get().strip():raise ValueError('API 키를 입력하세요.')
             self.setstatus('원고 작성 중...')
             args=(self.shop.get(),self.menu.get(),self.notes.get('1.0','end').strip(),photos,self.must_include.get('1.0','end').strip(),self.keywords.get('1.0','end').strip())
+            style_sample=self.style_sample.get('1.0','end').strip()
             ai=self.use_ai.get();key=self.api.get().strip()
             def work():
                 try:
-                    data=clean_data(ai_draft(key,*args) if ai else default_draft(*args))
+                    data=clean_data(ai_draft(key,*args,style_sample=style_sample) if ai else default_draft(*args))
                     out=save_preview(data)
                     def done():
                         self.data=data;self.view.delete('1.0','end');self.view.insert('end',data['title']+'\n')
