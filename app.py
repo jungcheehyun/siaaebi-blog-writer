@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.15'
+APP_VERSION = 'v18.16'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -610,12 +610,48 @@ def upload_via_naver_button(path, photo_button, notify):
             '네이버 글쓰기 창을 최대화하고 [네이버 사진 버튼 위치 지정 (5초)]으로 '
             '초록색 [사진] 아이콘의 위치를 다시 저장하세요.\n'
             '잘못된 위치에 파일 경로를 입력하지 않고 안전하게 중지했습니다.')
-    # Windows common file dialog: Alt+N focuses the File name edit.
-    pyautogui.hotkey('alt','n')
-    time.sleep(.25)
-    pyperclip.copy(str(path))
-    pyautogui.hotkey('ctrl','v')
-    time.sleep(.3)
+    # Windows 11 can ignore Alt+N even when the common file picker is visible.
+    # Click the native File name control (ID 1148) first, then verify that
+    # the complete absolute path is actually in that control before opening.
+    import win32gui
+    dialog = win32gui.GetForegroundWindow()
+    filename_control = win32gui.GetDlgItem(dialog, 1148)
+
+    def paste_and_verify():
+        pyperclip.copy(str(path))
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.hotkey('ctrl', 'v')
+        time.sleep(.3)
+        # Use a sentinel: otherwise reading the clipboard could accidentally
+        # confirm the string we ourselves copied rather than the edit contents.
+        pyperclip.copy('__SIAAEBI_PICKER_VERIFY__')
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.hotkey('ctrl', 'c')
+        time.sleep(.15)
+        captured = pyperclip.paste().strip().strip('"')
+        pyperclip.copy(str(path))
+        return os.path.normcase(captured) == os.path.normcase(str(path))
+
+    focused = False
+    if filename_control and win32gui.IsWindowVisible(filename_control):
+        left, top, right, bottom = win32gui.GetWindowRect(filename_control)
+        if right - left >= 80 and bottom - top >= 12:
+            pyautogui.click((left + right) // 2, (top + bottom) // 2)
+            time.sleep(.2)
+            focused = paste_and_verify()
+            if focused:
+                notify('사진 파일명 입력 확인 완료 (파일명 칸 직접 클릭): ' + path.name)
+    if not focused:
+        pyautogui.hotkey('alt', 'n')
+        time.sleep(.3)
+        focused = paste_and_verify()
+        if focused:
+            notify('사진 파일명 입력 확인 완료 (Alt+N): ' + path.name)
+    if not focused:
+        raise RuntimeError(
+            '사진 선택 창의 파일 이름 칸에 경로가 들어가지 않았습니다. '
+            '윈도우 파일 창에서 파일 이름 칸을 찾거나 입력하는 데 실패했습니다. '
+            '입력을 중단했습니다: ' + path.name)
     pyautogui.press('enter')
     # Wait for the picker to close, rather than blindly typing the next block.
     deadline=time.monotonic()+12.0
