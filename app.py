@@ -214,8 +214,7 @@ def clean_data(data):
     return data
 
 
-PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*
-def parse_pasted_draft(raw,photos):
+PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*def parse_pasted_draft(raw,photos):
     files={p.name.casefold():p for p in photos}
     blocks=[];buf=[];used=set();title=''
     def flush():
@@ -256,6 +255,10 @@ def parse_pasted_draft(raw,photos):
             blocks.append({'type':'answer_label','value':'A.'})
         else:buf.append(heading if line.startswith('#') else line)
     flush()
+    unresolved=[b['value'] for b in blocks if b['type']=='text'
+                and re.search(r'(?m)^\s*(?:📸\s*)?사진\s*\d+\b',b['value'])]
+    if unresolved:
+        raise ValueError('인식할 수 없는 사진 표시가 있습니다. [사진 1] 또는 📸 사진 1 — 설명 형식을 사용하세요.')
     if not blocks:raise ValueError('원고를 입력하세요.')
     return clean_data({'title':title or '시아애비 방문 후기','blocks':blocks})
 
@@ -605,6 +608,9 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             if previous not in (None,'image','hero_quote','question','final_quote'):
                 pyautogui.press('enter')
             type_unicode_text(b['value'],pause_event=pause_event,stop_event=stop_event)
+            if kind == 'answer_label':
+                # A. must be on its own line, followed by Enter and answer.
+                pyautogui.press('enter')
         previous=kind
         notify(f'입력 중: {i+1}/{len(data["blocks"])}')
     notify('입력 완료 — 인용구 뒤 본문 분리, 마지막 프레임, 사진 다음 A. 위치를 확인하세요. 임시저장은 직접 눌러 주세요')
@@ -677,7 +683,7 @@ class App:
         ttk.Button(buttons,text='② 사진 포함 미리보기',command=self.preview).pack(side='left',padx=3)
         ttk.Button(buttons,text='③ 네이버 입력 시작',style='Accent.TButton',command=self.naver).pack(side='left',padx=3)
         ttk.Button(buttons,text='원고 적용',command=self.apply_pasted_draft).pack(side='left',padx=3)
-        self.go=ttk.Button(buttons,text='입력 시작 (F7)',style='Accent.TButton',command=self.begin);self.go.pack(side='left',padx=3)
+        self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin);self.go.pack(side='left',padx=3)
         self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
         self.stop_button=ttk.Button(buttons,text='중지 (F9)',command=self.stop_input,state='disabled');self.stop_button.pack(side='left',padx=3)
         saved_positions = load_editor_positions()
@@ -709,9 +715,9 @@ class App:
         ttk.Button(positions_row,text='위치 설정 초기화',command=self.reset_positions).pack(side='right')
         self.set_saved_positions_status()
 
-        ttk.Button(main,text='업데이트 확인',command=self.update_info).pack(anchor='e',pady=(0,4))
+        ttk.Button(main,text='업데이트 확인',style='Accent.TButton',command=self.update_info).pack(anchor='e',pady=(0,4))
         ttk.Label(main,text='모바일 폭 미리보기 (글 왼쪽 / 사진 가운데 / Q → 사진 → A. → 답변)',font=('맑은 고딕',10,'bold')).pack(anchor='w')
-        self.view=tk.Text(main,height=24,wrap='word',font=('맑은 고딕',11),bg='#FFFFFF',fg='#1E293B',insertbackground='#1E293B',relief='flat',padx=14,pady=12,spacing1=3,spacing3=3);self.view.pack(fill='both',expand=True,pady=6)
+        self.view=tk.Text(main,height=24,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
         self.status=tk.StringVar(value='원고를 붙여넣고 미리보기 또는 입력을 누르세요.')
         ttk.Label(main,textvariable=self.status,wraplength=700,foreground='#175b80').pack(anchor='w',pady=7)
         ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 네이버 상단 초록색 [사진] 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
@@ -928,8 +934,7 @@ class App:
 
 if __name__=='__main__':
     root=tk.Tk();App(root);root.mainloop(),re.I)
-PHOTO_MARKER_NATURAL=re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–-]\s*.*)?\s*
-def parse_pasted_draft(raw,photos):
+PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–:-]\s*.*)?\s*def parse_pasted_draft(raw,photos):
     files={p.name.casefold():p for p in photos}
     blocks=[];buf=[];used=set();title=''
     def flush():
@@ -1615,13 +1620,17 @@ class App:
             self.root.after(0,lambda:(self.go.config(state='normal'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
 
 if __name__=='__main__':
-    root=tk.Tk();App(root);root.mainloop(),re.I)
+    root=tk.Tk();App(root);root.mainloop(), re.I)
 
 def strip_draft_markdown(value):
-    value=value.strip()
-    if value.startswith('**') and value.endswith('**') and len(value)>=4:
-        value=value[2:-2].strip()
-    return value
+    """Remove copy/pasted Markdown styling, not Naver content."""
+    line = str(value).strip()
+    if line.startswith('**') and line.endswith('**') and len(line) > 4:
+        line = line[2:-2].strip()
+    if line.startswith('__') and line.endswith('__') and len(line) > 4:
+        line = line[2:-2].strip()
+    return line
+
 def parse_pasted_draft(raw,photos):
     files={p.name.casefold():p for p in photos}
     blocks=[];buf=[];used=set();title=''
