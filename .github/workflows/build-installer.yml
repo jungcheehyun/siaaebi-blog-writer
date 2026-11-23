@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "app.py"
       - "installer/**"
       - ".github/workflows/build-installer.yml"
   workflow_dispatch:
@@ -36,22 +37,49 @@ jobs:
           python installer/create_icon.py
           if ($LASTEXITCODE -ne 0) { throw "Icon generation failed" }
           if (!(Test-Path installer/siaaebi_icon.ico)) { throw "ICO missing" }
-      - name: Download and validate latest Windows app package
+      - name: Download and validate matching Windows app release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = gh release view --json tagName --jq '.tagName'
-          if ($LASTEXITCODE -ne 0 -or !$tag) { throw "Latest release unavailable" }
+          $source = Get-Content app.py -Raw -Encoding utf8
+          if ($source -notmatch "(?m)^APP_VERSION = '(v[0-9]+(?:\.[0-9]+)*)'$") { throw "Unable to read app version" }
+          $tag = $Matches[1]
           "SIA_VERSION=$tag" >> $env:GITHUB_ENV
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            # PR smoke test uses last published release while app build runs separately.
+            $tag = gh release view --json tagName --jq '.tagName'
+            if (!$tag) { throw "No released Windows app" }
+            "SIA_VERSION=$tag" >> $env:GITHUB_ENV
+          } else {
+            $found = $false
+            for ($i=0; $i -lt 90; $i++) {
+              gh release view "$tag" --json assets --jq '.assets[].name' 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { $found=$true; break }
+              Start-Sleep -Seconds 10
+            }
+            if (!$found) { throw "Matching app release $tag was not published" }
+          }
           New-Item -ItemType Directory -Force installer/payload/app | Out-Null
-          gh release download "$tag" --pattern "siaaebi-update.zip" --dir installer/payload --clobber
-          if ($LASTEXITCODE -ne 0) { throw "Download failed" }
+          gh release download "$tag" --pattern "siaaebi-update.zip*" --dir installer/payload --clobber
+          if ($LASTEXITCODE -ne 0) { throw "App package download failed" }
+          @'
+          from pathlib import Path
+          import hashlib
+          folder=Path("installer/payload")
+          payload=folder/"siaaebi-update.zip"
+          expected=(folder/"siaaebi-update.zip.sha256").read_text().split()[0].lower()
+          assert hashlib.sha256(payload.read_bytes()).hexdigest() == expected, "Update SHA256 mismatch"
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Release integrity check failed" }
           Expand-Archive -LiteralPath installer/payload/siaaebi-update.zip -DestinationPath installer/payload/app -Force
           foreach ($exe in @("SiaAebiBlogWriter.exe", "SiaAebiUpdater.exe")) {
             if (!(Test-Path "installer/payload/app/$exe")) { throw "Missing app file: $exe" }
           }
           if (!(Test-Path installer/payload/app/_internal)) { throw "PyInstaller dependency folder missing" }
+          if ("${{ github.event_name }}" -ne "pull_request" -and !(Test-Path installer/payload/app/_internal/siaaebi_icon.ico)) {
+            throw "Updated application icon missing from release"
+          }
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
