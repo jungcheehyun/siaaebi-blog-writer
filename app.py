@@ -5,11 +5,33 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.14'
+APP_VERSION = 'v18.15'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+
+def apply_app_icon(root):
+    """Use the same pencil-baby icon for the application window and taskbar.
+
+    PyInstaller packs these files under sys._MEIPASS; the .exe itself also embeds
+    this .ico via --icon, so updates change the taskbar/Explorer icon too.
+    """
+    resource_root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+    png = resource_root / 'siaaebi_icon.png'
+    ico = resource_root / 'siaaebi_icon.ico'
+    if png.is_file():
+        try:
+            root._siaaebi_icon = tk.PhotoImage(file=str(png))
+            root.iconphoto(True, root._siaaebi_icon)
+        except tk.TclError:
+            pass
+    if ico.is_file() and os.name == 'nt':
+        try:
+            root.iconbitmap(str(ico))
+        except tk.TclError:
+            pass
+
 
 def version_parts(value):
     raw = str(value).strip().lower().lstrip('v')
@@ -1085,4 +1107,4 @@ class App:
             self.root.after(0,lambda:(self.go.config(state='normal'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
 
 if __name__=='__main__':
-    root=tk.Tk();App(root);root.mainloop()
+    root=tk.Tk();apply_app_icon(root);App(root);root.mainloop()
