@@ -161,8 +161,8 @@ class DraftParsingTests(unittest.TestCase):
         data=parse_pasted_draft(draft,self.photos)
         kinds=[b["type"] for b in data["blocks"]]
         self.assertEqual(kinds, ["hero_quote","question","image","answer_label",
-                                 "text","final_quote","answer_label","text"])
-        self.assertEqual(data["blocks"][-3]["value"],"Q. 의정부 양촌리 총평은 어떨까요?")
+                                 "text","final_quote","answer_label","text","text"])
+        self.assertEqual(data["blocks"][-4]["value"],"Q. 의정부 양촌리 총평은 어떨까요?")
         self.assertIn("#의정부양촌리",data["blocks"][-1]["value"])
 
     def test_normal_question_keeps_question_quote_style(self):
