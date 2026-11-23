@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from app import parse_pasted_draft, PHOTO_MARKER_NATURAL, safe_naver_typing_text
+from app import parse_pasted_draft, PHOTO_MARKER_NATURAL, safe_naver_typing_text, compose, make_hook_title, make_subtitle
 
 
 class DraftParsingTests(unittest.TestCase):
@@ -51,6 +51,51 @@ class DraftParsingTests(unittest.TestCase):
         data = parse_pasted_draft("제목\nQ. 외관은?\n📸 사진 1 — 외관\nA.\n답변입니다",self.photos)
         self.assertEqual([b["type"] for b in data["blocks"]],
                          ["question","image","answer_label","text"])
+
+
+    def test_explicit_subtitle_is_quote_block_not_body_text(self):
+        data = parse_pasted_draft(
+            "의정부에 이런 돼지갈비집이 있었다고?\n"
+            "[부제목] 양촌리 돼지갈비 김치찌개 맛집 가족외식 추천\n"
+            "안녕하세요 시아애비입니다\n"
+            "Q. 외관이 어땠나요?\n"
+            "📸 사진 1 — 외관\nA.\n큼직한 건물이 인상적이었어요",
+            self.photos)
+        self.assertEqual(data["title"], "의정부에 이런 돼지갈비집이 있었다고?")
+        self.assertEqual([b["type"] for b in data["blocks"]],
+                         ["hero_quote","text","question","image","answer_label","text"])
+        self.assertEqual(data["blocks"][0]["value"], "양촌리 돼지갈비 김치찌개 맛집 가족외식 추천")
+        self.assertEqual(data["blocks"][1]["value"], "안녕하세요 시아애비입니다")
+
+    def test_markdown_subtitle_in_source(self):
+        data = parse_pasted_draft(
+            "# 의정부에 이런 돼지갈비집이 있었다고?\n"
+            "### 양촌리 돼지갈비 김치찌개 맛집 가족외식 추천\n"
+            "안녕하세요 시아애비입니다", self.photos)
+        self.assertEqual(data["blocks"][0]["type"], "hero_quote")
+        self.assertEqual(data["blocks"][1]["type"], "text")
+
+    def test_pasted_draft_missing_subtitle_uses_explicit_ui_fallback(self):
+        data = parse_pasted_draft(
+            "의정부에 이런 돼지갈비집이 있었다고?\n안녕하세요 시아애비입니다",
+            self.photos, default_subtitle="양촌리 돼지갈비 맛집")
+        self.assertEqual(data["blocks"][0], {"type":"hero_quote","value":"양촌리 돼지갈비 맛집"})
+
+    def test_generated_draft_keeps_name_in_quote_not_title(self):
+        data = compose("의정부 양촌리", "돼지갈비 김치찌개", "",
+                       self.photos[:1], [{"q":"외관은?","a":"건물이 커요"}],
+                       title="의정부 양촌리 돼지갈비 맛집", keywords="맛집 가족외식 추천")
+        self.assertNotIn("양촌리",data["title"])
+        self.assertEqual(data["blocks"][0]["type"], "hero_quote")
+        self.assertIn("양촌리",data["blocks"][0]["value"])
+        self.assertIn("가족외식",data["blocks"][0]["value"])
+        self.assertEqual(data["blocks"][2]["type"], "question")
+
+    def test_hook_title_excludes_business_name(self):
+        title=make_hook_title("의정부 양촌리","돼지갈비",
+                              suggestion="양촌리 돼지갈비가 좋았어요")
+        self.assertNotIn("양촌리",title)
+        self.assertIn("돼지갈비",title)
 
 
 if __name__ == "__main__":
