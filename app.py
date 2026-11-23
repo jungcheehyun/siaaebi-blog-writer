@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.7'
+APP_VERSION = 'v18.8'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -215,6 +215,17 @@ def clean_data(data):
 
 
 PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
+PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–:-]\s*.*)?\s*$', re.I)
+
+def strip_draft_markdown(value):
+    """Remove copy/pasted Markdown styling from standalone lines."""
+    line = str(value).strip()
+    if line.startswith('**') and line.endswith('**') and len(line) > 4:
+        line = line[2:-2].strip()
+    if line.startswith('__') and line.endswith('__') and len(line) > 4:
+        line = line[2:-2].strip()
+    return line
+
 def parse_pasted_draft(raw,photos):
     files={p.name.casefold():p for p in photos}
     blocks=[];buf=[];used=set();title=''
@@ -224,14 +235,15 @@ def parse_pasted_draft(raw,photos):
             buf.clear()
             if value:blocks.append({'type':'text','value':value})
     for original in raw.replace('\r','').split('\n'):
-        line=original.strip()
+        line=strip_draft_markdown(original)
         if not line or line=='---':
             flush()
             continue
         match=PHOTO_MARKER.fullmatch(line)
-        if match:
+        natural=PHOTO_MARKER_NATURAL.fullmatch(line) if not match else None
+        if match or natural:
             flush()
-            number,filename=match.groups()
+            number,filename=match.groups() if match else (natural.group(1),'')
             if filename.strip():
                 photo=files.get(Path(filename.strip()).name.casefold())
                 if photo is None:raise ValueError('사진 파일 없음: '+filename)
@@ -253,8 +265,12 @@ def parse_pasted_draft(raw,photos):
         elif re.fullmatch(r'A\.',heading,re.I):
             flush()
             blocks.append({'type':'answer_label','value':'A.'})
-        else:buf.append(heading if line.startswith('#') else original)
+        else:buf.append(heading if line.startswith('#') else line)
     flush()
+    unresolved=[b['value'] for b in blocks if b['type']=='text'
+                and re.search(r'(?m)^\s*(?:📸\s*)?사진\s*\d+\b',b['value'])]
+    if unresolved:
+        raise ValueError('인식할 수 없는 사진 표시가 있습니다. [사진 1] 또는 📸 사진 1 — 설명 형식을 사용하세요.')
     if not blocks:raise ValueError('원고를 입력하세요.')
     return clean_data({'title':title or '시아애비 방문 후기','blocks':blocks})
 
@@ -601,16 +617,41 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
         else:
             # The first prose block starts at the clicked location outside the
             # quotation; inserting Enter here could return to the quote.
-            if previous not in (None,'image','hero_quote','question','final_quote'):
+            if previous not in (None,'image','hero_quote','question','final_quote','answer_label'):
                 pyautogui.press('enter')
             type_unicode_text(b['value'],pause_event=pause_event,stop_event=stop_event)
+            if kind == 'answer_label':
+                pyautogui.press('enter')  # Keep A. on its own line.
         previous=kind
         notify(f'입력 중: {i+1}/{len(data["blocks"])}')
     notify('입력 완료 — 인용구 뒤 본문 분리, 마지막 프레임, 사진 다음 A. 위치를 확인하세요. 임시저장은 직접 눌러 주세요')
 
 class App:
+    @staticmethod
+    def configure_modern_style(root):
+        # Native ttk theme, no third-party UI runtime dependency.
+        style=ttk.Style(root)
+        if 'clam' in style.theme_names():
+            style.theme_use('clam')
+        bg='#F5F7FB'; surface='#FFFFFF'; ink='#1E293B'
+        root.configure(bg=bg)
+        style.configure('.', font=('맑은 고딕', 10), background=bg, foreground=ink)
+        style.configure('TFrame', background=bg)
+        style.configure('TLabel', background=bg, foreground=ink, padding=(0,2))
+        style.configure('TLabelframe', background=bg, bordercolor='#DDE3ED', relief='solid')
+        style.configure('TLabelframe.Label', background=bg, foreground='#334155', font=('맑은 고딕',10,'bold'))
+        style.configure('TEntry', padding=(10,8), fieldbackground=surface, bordercolor='#CBD5E1')
+        style.configure('TButton', padding=(12,9), background=surface, foreground=ink,
+                        bordercolor='#D4DBE7', relief='flat')
+        style.map('TButton', background=[('active','#E8EDF7'),('pressed','#DCE5F5')])
+        style.configure('Accent.TButton', background='#2563EB', foreground='#FFFFFF',
+                        bordercolor='#2563EB', font=('맑은 고딕',10,'bold'), padding=(14,10))
+        style.map('Accent.TButton', background=[('active','#1D4ED8'),('pressed','#1E40AF')])
+        style.configure('TCheckbutton', background=bg, foreground=ink)
+        style.configure('TSpinbox', padding=(5,4))
     def __init__(self,root):
-        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('900x750')
+        self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('1040x810')
+        self.configure_modern_style(root)
         self.folder=tk.StringVar(value=str(ROOT/'예제사진'))
         self.shop=tk.StringVar(value='의정부 경원식당 의정부역전점')
         self.menu=tk.StringVar(value='부대찌개')
@@ -618,7 +659,9 @@ class App:
         self.use_ai=tk.BooleanVar(value=False)
         self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
         main=ttk.Frame(root,padding=15);main.pack(fill='both',expand=True)
-        ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',18,'bold')).pack(anchor='w',pady=(0,12))
+        ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',21,'bold')).pack(anchor='w',pady=(0,3))
+        ttk.Label(main,text='원고 작성부터 사진 첨부까지  ·  '+APP_VERSION,
+                  foreground='#64748B').pack(anchor='w',pady=(0,14))
         for title,var in [('사진 폴더',self.folder),('상호명',self.shop),('대표 메뉴',self.menu)]:
             row=ttk.Frame(main);row.pack(fill='x',pady=4)
             ttk.Label(row,text=title,width=12).pack(side='left')
@@ -649,7 +692,7 @@ class App:
         buttons=ttk.Frame(main);buttons.pack(fill='x',pady=12)
         ttk.Button(buttons,text='① 원고 생성',command=self.generate).pack(side='left',padx=3)
         ttk.Button(buttons,text='② 사진 포함 미리보기',command=self.preview).pack(side='left',padx=3)
-        ttk.Button(buttons,text='③ 네이버 입력 시작',command=self.naver).pack(side='left',padx=3)
+        ttk.Button(buttons,text='③ 네이버 입력 시작',style='Accent.TButton',command=self.naver).pack(side='left',padx=3)
         ttk.Button(buttons,text='원고 적용',command=self.apply_pasted_draft).pack(side='left',padx=3)
         self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin);self.go.pack(side='left',padx=3)
         self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
@@ -683,7 +726,7 @@ class App:
         ttk.Button(positions_row,text='위치 설정 초기화',command=self.reset_positions).pack(side='right')
         self.set_saved_positions_status()
 
-        ttk.Button(main,text='업데이트 확인',command=self.update_info).pack(anchor='e',pady=(0,4))
+        ttk.Button(main,text='업데이트 확인',style='Accent.TButton',command=self.update_info).pack(anchor='e',pady=(0,4))
         ttk.Label(main,text='모바일 폭 미리보기 (글 왼쪽 / 사진 가운데 / Q → 사진 → A. → 답변)',font=('맑은 고딕',10,'bold')).pack(anchor='w')
         self.view=tk.Text(main,height=24,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
         self.status=tk.StringVar(value='원고를 붙여넣고 미리보기 또는 입력을 누르세요.')

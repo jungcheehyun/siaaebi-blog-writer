@@ -17,8 +17,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: siaaebi-release
-  cancel-in-progress: false
+  group: siaaebi-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-release:
@@ -69,6 +69,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip pyinstaller
           python -m pip install -r requirements.txt
+      - name: Test draft parsing
+        if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          python -m py_compile app.py
+          python -m unittest -v test_draft_parser.py
+          if ($LASTEXITCODE -ne 0) { throw 'Draft parsing tests failed' }
       - name: Build EXEs
         if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
         shell: pwsh
