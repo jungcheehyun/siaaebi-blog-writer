@@ -306,7 +306,12 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
             if not value: raise ValueError('부제목 내용을 입력하세요.')
             blocks.append({'type':'hero_quote','value':value})
             continue
-        heading=re.sub(r'^#{1,6}\s*','',line)
+        # A hashtag is NOT a Markdown heading. Keep the leading # intact.
+        if line.startswith('#') and not re.match(r'^#{1,6}\s+',line):
+            flush()
+            blocks.append({'type':'text','value':line})
+            continue
+        heading=re.sub(r'^#{1,6}\s+','',line)
         if not title and not blocks and not buf:title=heading
         elif re.match(r'^Q\.\s*',heading,re.I):
             flush()
