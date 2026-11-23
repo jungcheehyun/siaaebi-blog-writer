@@ -980,6 +980,8 @@ class App:
                         for b in data['blocks']:
                             if b['type']=='hero_quote':
                                 rendered='[부제목] '+b['value']
+                            elif b['type']=='final_quote':
+                                rendered='[마무리]\n'+b['value']
                             elif b['type']=='image':
                                 rendered='[사진] '+Path(b['path']).name
                             else:
