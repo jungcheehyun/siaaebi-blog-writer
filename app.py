@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.9'
+APP_VERSION = 'v18.10'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -136,7 +136,8 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
         intro=str(ai_intro).strip()
     elif notes.strip():
         intro+='\n\n'+notes.strip()
-    blocks=[{'type':'hero_quote','value':shop},{'type':'text','value':intro}]
+    subtitle=make_subtitle(shop, menu, keywords)
+    blocks=[{'type':'hero_quote','value':subtitle},{'type':'text','value':intro}]
     valid=[]
     for section in (sections or []):
         if isinstance(section,dict) and isinstance(section.get('q'),str) and isinstance(section.get('a'),str):
@@ -169,14 +170,42 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
     return {'title':make_hook_title(shop,menu,title),'blocks':blocks}
 
 
+def make_subtitle(shop, menu, keywords=""):
+    """Keep the business name and user-provided search keywords in the quote."""
+    shop=re.sub(r'\s+', ' ', str(shop or '').strip())
+    menu=re.sub(r'\s+', ' ', str(menu or '').strip())
+    keywords=re.sub(r'[,;/]+', ' ', str(keywords or '').strip())
+    keywords=re.sub(r'\s+', ' ', keywords)
+    bits=[]
+    for value in (shop, menu, keywords):
+        if value and value not in ' '.join(bits):
+            bits.append(value)
+    if not bits:
+        raise ValueError('상호명 또는 부제목을 입력하세요.')
+    return ' '.join(bits)
+
+
 def make_hook_title(shop, menu, suggestion=None):
-    """짧은 모바일 한 줄용 후킹 제목. 상호명은 본문 인용구에만 둔다."""
-    area='의정부' if '의정부' in shop else shop.split()[0]
-    if suggestion and 5 <= len(str(suggestion).strip()) <= 28:
-        return str(suggestion).strip()
-    for title in (f'{area} {menu} 어디가 좋을까?',f'{area} {menu} 여기 어떨까?',f'{menu} 맛집 어디일까?'):
-        if len(title)<=19:return title
-    return f'{menu} 맛집 어디일까?'
+    """Curiosity-first title; business name belongs in the subtitle quote only."""
+    shop=str(shop or '').strip()
+    menu=str(menu or '맛집').strip()
+    area='의정부' if '의정부' in shop else (shop.split()[0] if shop else '여기')
+    names=[shop]
+    if ' ' in shop:
+        names.append(shop.split()[-1])
+    if suggestion:
+        title=re.sub(r'\s+', ' ',str(suggestion).strip())
+        if 5 <= len(title) <= 34 and not any(name and name in title for name in names):
+            return title
+    proposals=[
+        f'{area}에 이런 {menu}집이 있었다고?',
+        f'{area}에서 찾은 뜻밖의 {menu} 맛집!',
+        f'{menu} 좋아하면 여긴 궁금할걸?',
+    ]
+    for title in proposals:
+        if len(title)<=32 and not any(name and name in title for name in names):
+            return title
+    return '이런 맛집이 있었다고?'
 
 KOREAN_NUMBERS = {
     '1000':'천', '2000':'이천', '3000':'삼천', '4000':'사천', '5000':'오천',
@@ -215,6 +244,7 @@ def clean_data(data):
 
 
 PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
+SUBTITLE_MARKER = re.compile(r'^(?:\[부제목\]\s*|부제목\s*[:：]\s*)(.+)$', re.I)
 PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–:-]\s*.*)?\s*$', re.I)
 
 def strip_draft_markdown(value):
@@ -226,7 +256,7 @@ def strip_draft_markdown(value):
         line = line[2:-2].strip()
     return line
 
-def parse_pasted_draft(raw,photos):
+def parse_pasted_draft(raw,photos,default_subtitle=None):
     files={p.name.casefold():p for p in photos}
     blocks=[];buf=[];used=set();title=''
     def flush():
@@ -257,6 +287,16 @@ def parse_pasted_draft(raw,photos):
             used.add(str(photo))
             blocks.append({'type':'image','path':str(photo),'caption':''})
             continue
+        subtitle_match=SUBTITLE_MARKER.fullmatch(line)
+        markdown_subtitle=re.match(r'^#{2,4}\s+(.+)$',line) if title and not blocks and not buf else None
+        if subtitle_match or markdown_subtitle:
+            flush()
+            if any(b['type']=='hero_quote' for b in blocks):
+                raise ValueError('부제목 인용구는 하나만 사용할 수 있습니다.')
+            value=(subtitle_match or markdown_subtitle).group(1).strip()
+            if not value: raise ValueError('부제목 내용을 입력하세요.')
+            blocks.append({'type':'hero_quote','value':value})
+            continue
         heading=re.sub(r'^#{1,6}\s*','',line)
         if not title and not blocks and not buf:title=heading
         elif re.match(r'^Q\.\s*',heading,re.I):
@@ -267,6 +307,9 @@ def parse_pasted_draft(raw,photos):
             blocks.append({'type':'answer_label','value':'A.'})
         else:buf.append(heading if line.startswith('#') else line)
     flush()
+    if not any(b['type']=='hero_quote' for b in blocks):
+        if default_subtitle and str(default_subtitle).strip():
+            blocks.insert(0,{'type':'hero_quote','value':str(default_subtitle).strip()})
     unresolved=[b['value'] for b in blocks if b['type']=='text'
                 and re.search(r'(?m)^\s*(?:📸\s*)?사진\s*\d+\b',b['value'])]
     if unresolved:
@@ -278,7 +321,7 @@ def default_draft(shop, menu, notes, photos, must_include="", keywords=""):
     """Without image analysis, don't fabricate photo-specific Q&A or repeat filler."""
     shop=shop.strip() or '방문한 곳'
     menu=menu.strip() or '메뉴'
-    blocks=[{'type':'hero_quote','value':shop}]
+    blocks=[{'type':'hero_quote','value':make_subtitle(shop, menu, keywords)}]
     if notes.strip():
         blocks.append({'type':'text','value':notes.strip()})
     else:
@@ -666,8 +709,8 @@ class App:
         self.root=root;root.title(f'시아애비 블로그 자동작성기 {APP_VERSION}');root.geometry('1040x810')
         self.configure_modern_style(root)
         self.folder=tk.StringVar(value=str(ROOT/'예제사진'))
-        self.shop=tk.StringVar(value='의정부 경원식당 의정부역전점')
-        self.menu=tk.StringVar(value='부대찌개')
+        self.shop=tk.StringVar(value='')
+        self.menu=tk.StringVar(value='')
         self.api=tk.StringVar(value=os.getenv('OPENAI_API_KEY',''))
         self.use_ai=tk.BooleanVar(value=False)
         self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
@@ -877,7 +920,13 @@ class App:
                     def done():
                         self.data=data;self.view.delete('1.0','end');self.view.insert('end',data['title']+'\n')
                         for b in data['blocks']:
-                            self.view.insert('end',(b['value'] if b['type'] in ('text','question','hero_quote','final_quote','answer_label') else ('[인용구] '+b['value'] if b['type']=='hero_quote' else '[사진] '+Path(b['path']).name))+'\n')
+                            if b['type']=='hero_quote':
+                                rendered='[부제목] '+b['value']
+                            elif b['type']=='image':
+                                rendered='[사진] '+Path(b['path']).name
+                            else:
+                                rendered=b['value']
+                            self.view.insert('end',rendered+'\n')
                         self.status.set('원고 생성 완료. 미리보기 파일: '+str(out))
                     self.root.after(0,done)
                 except Exception as e:self.setstatus('오류: '+str(e))
@@ -886,7 +935,11 @@ class App:
     def current_draft(self):
         raw=self.view.get('1.0','end').strip()
         if not raw:raise ValueError('원고를 붙여넣어 주세요.')
-        return parse_pasted_draft(raw,sorted_photos(self.folder.get()))
+        explicit_subtitle=bool(re.search(r'(?m)^\s*(?:\[부제목\]|부제목\s*[:：]|#{2,4}\s+)',raw))
+        if not explicit_subtitle and not self.shop.get().strip():
+            raise ValueError('부제목 인용구에 넣을 상호명이 없습니다. 상호명을 입력하거나 원고 둘째 줄에 [부제목] 양촌리 돼지갈비 맛집 형식으로 추가하세요.')
+        fallback=make_subtitle(self.shop.get(),self.menu.get(),self.keywords.get('1.0','end').strip()) if not explicit_subtitle else None
+        return parse_pasted_draft(raw,sorted_photos(self.folder.get()),default_subtitle=fallback)
     def apply_pasted_draft(self):
         try:self.data=self.current_draft();self.setstatus('현재 원고 적용 완료')
         except Exception as e:messagebox.showerror('원고 확인',str(e))
