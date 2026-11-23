@@ -664,15 +664,22 @@ def upload_via_naver_button(path, photo_button, notify):
             return False
         return os.path.normcase(check.value.strip().strip('"')) == os.path.normcase(full_name)
 
-    opened = fill_native_filename()
+    try:
+        opened = fill_native_filename()
+    except Exception as e:
+        notify('Windows 기본 파일명 입력 확인 실패, 대체 방식으로 전환: ' + str(e))
+        opened = False
     if opened:
         notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
         # Clicking the actual Open button commits the combo box value.
-        open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
-        if open_button and win32gui.IsWindowVisible(open_button):
-            left, top, right, bottom = win32gui.GetWindowRect(open_button)
-            pyautogui.click((left + right) // 2, (top + bottom) // 2)
-        else:
+        try:
+            open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
+            if open_button and win32gui.IsWindowVisible(open_button):
+                left, top, right, bottom = win32gui.GetWindowRect(open_button)
+                pyautogui.click((left + right) // 2, (top + bottom) // 2)
+            else:
+                pyautogui.press('enter')
+        except Exception:
             pyautogui.press('enter')
         for _ in range(28):
             if dialog_closed():
