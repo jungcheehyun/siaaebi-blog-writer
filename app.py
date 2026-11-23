@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.12'
+APP_VERSION = 'v18.13'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -306,11 +306,17 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
             if not value: raise ValueError('부제목 내용을 입력하세요.')
             blocks.append({'type':'hero_quote','value':value})
             continue
-        heading=re.sub(r'^#{1,6}\s*','',line)
+        # A hashtag is NOT a Markdown heading. Keep the leading # intact.
+        if line.startswith('#') and not re.match(r'^#{1,6}\s+',line):
+            flush()
+            blocks.append({'type':'text','value':line})
+            continue
+        heading=re.sub(r'^#{1,6}\s+','',line)
         if not title and not blocks and not buf:title=heading
         elif re.match(r'^Q\.\s*',heading,re.I):
             flush()
-            blocks.append({'type':'question','value':heading})
+            question_kind = 'final_quote' if re.search(r'총평|마무리|한마디|전체\s*평가',heading) else 'question'
+            blocks.append({'type':question_kind,'value':heading})
         elif re.fullmatch(r'A\.',heading,re.I):
             flush()
             blocks.append({'type':'answer_label','value':'A.'})
@@ -606,6 +612,20 @@ def apply_quote(quote_button, quote_style, notify):
     notify('네이버 실제 인용구 메뉴 선택 완료 — 화면에서 서식 적용 여부를 확인하세요')
 
 
+def exit_final_quote(notify):
+    """Exit final quotation at the CURRENT end of the document, not a stale screen point.
+
+    SmartEditor often needs two Enter presses at the end of a quotation.
+    The final Q is deliberately short; we avoid moving the caret by a fixed pixel
+    distance, which previously landed in an old question/hashtag paragraph.
+    """
+    import pyautogui
+    pyautogui.press('end')
+    pyautogui.press('enter', presses=2, interval=.2)
+    time.sleep(.35)
+    notify('마지막 총평 인용구 종료: Enter 두 번 후 A. 입력')
+
+
 def click_below_intro_quote(body_point, offset_px, notify):
     """Leave the first quotation by clicking in the ordinary body area below it.
 
@@ -680,9 +700,16 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             # If the next block is a photo, keep the current behavior.
             # Otherwise click below the quotation so prose/A. is not typed
             # inside the quotation frame.
-            if next_kind != 'image':
+            if kind == 'hero_quote' and next_kind != 'image':
                 check_control(pause_event,stop_event)
                 click_below_intro_quote(body_point,quote_exit_offset,notify)
+            elif kind == 'final_quote':
+                check_control(pause_event,stop_event)
+                exit_final_quote(notify)
+            elif kind == 'question' and next_kind != 'image':
+                check_control(pause_event,stop_event)
+                pyautogui.press('end')
+                pyautogui.press('enter', presses=2, interval=.2)
         else:
             # The first prose block starts at the clicked location outside the
             # quotation; inserting Enter here could return to the quote.
@@ -764,9 +791,9 @@ class App:
         buttons=ttk.Frame(main);buttons.pack(fill='x',pady=12)
         ttk.Button(buttons,text='① 원고 생성',command=self.generate).pack(side='left',padx=3)
         ttk.Button(buttons,text='② 사진 포함 미리보기',command=self.preview).pack(side='left',padx=3)
-        ttk.Button(buttons,text='③ 네이버 입력 시작',style='Accent.TButton',command=self.naver).pack(side='left',padx=3)
+        ttk.Button(buttons,text='③ 네이버 글쓰기 열기',command=self.open_naver).pack(side='left',padx=3)
         ttk.Button(buttons,text='원고 적용',command=self.apply_pasted_draft).pack(side='left',padx=3)
-        self.go=ttk.Button(buttons,text='입력 시작 (F7)',command=self.begin);self.go.pack(side='left',padx=3)
+        self.go=ttk.Button(buttons,text='원고 적용 후 바로 입력 시작 (F7)',style='Accent.TButton',command=self.begin);self.go.pack(side='left',padx=3)
         self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
         self.stop_button=ttk.Button(buttons,text='중지 (F9)',command=self.stop_input,state='disabled');self.stop_button.pack(side='left',padx=3)
         saved_positions = load_editor_positions()
@@ -959,13 +986,20 @@ class App:
         fallback=make_subtitle(self.shop.get(),self.menu.get(),self.keywords.get('1.0','end').strip()) if not explicit_subtitle else None
         return parse_pasted_draft(raw,sorted_photos(self.folder.get()),default_subtitle=fallback)
     def apply_pasted_draft(self):
-        try:self.data=self.current_draft();self.setstatus('현재 원고 적용 완료')
-        except Exception as e:messagebox.showerror('원고 확인',str(e))
+        try:
+            self.data=self.current_draft()
+            self.setstatus('원고 적용 완료 · 이제 [입력 시작 (F7)]만 누르면 됩니다 (네이버 입력 시작 단계 불필요)')
+        except Exception as e:
+            messagebox.showerror('원고 확인',str(e))
     def preview(self):
         try:
             self.data=self.current_draft()
             webbrowser.open(save_preview(self.data).as_uri())
         except Exception as e:messagebox.showerror('미리보기 실패',str(e))
+    def open_naver(self):
+        webbrowser.open('https://blog.naver.com/')
+        self.setstatus('네이버 글쓰기 화면을 열고 제목 칸을 클릭하세요. 이후 [입력 시작 (F7)]을 누르면 됩니다')
+
     def naver(self):
         try:self.data=self.current_draft()
         except Exception as e:return messagebox.showerror('원고 확인',str(e))
