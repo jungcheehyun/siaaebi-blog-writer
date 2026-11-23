@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.11'
+APP_VERSION = 'v18.12'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -102,8 +102,15 @@ def save_editor_positions(values):
 EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 
 
+def natural_photo_key(path):
+    """Sort like Windows Explorer: 1, 2, ..., 9, 10, 11 rather than 1, 10, 11, 2."""
+    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                 for part in re.split(r'(\d+)', Path(path).name))
+
+
 def sorted_photos(folder):
-    return sorted((p for p in Path(folder).iterdir() if p.suffix.lower() in EXTS), key=lambda p: p.name.lower())
+    return sorted((p for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() in EXTS),
+                  key=natural_photo_key)
 
 
 def photo_topic(path, index):

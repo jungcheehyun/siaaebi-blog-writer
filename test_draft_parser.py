@@ -129,6 +129,24 @@ class DraftParsingTests(unittest.TestCase):
             self.assertTrue(saved["body_anchor_verified"])
             self.assertEqual(saved["body_point"],(700,430))
 
+    def test_photo_files_sort_in_windows_numeric_order(self):
+        import app
+        with tempfile.TemporaryDirectory() as folder:
+            for i in range(1,13):
+                (Path(folder)/f"{i}.jpg").write_bytes(b"x")
+            photos=app.sorted_photos(folder)
+            self.assertEqual([p.stem for p in photos], [str(i) for i in range(1,13)])
+            self.assertEqual(app.parse_pasted_draft("제목\n[사진 2]",photos)["blocks"][0]["path"],
+                             str(Path(folder)/"2.jpg"))
+
+    def test_mixed_names_and_gif_sort_naturally(self):
+        import app
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ("photo10.jpg","photo2.jpg","photo1.jpg","photo9.gif","readme.txt"):
+                (Path(folder)/name).write_bytes(b"x")
+            self.assertEqual([p.name for p in app.sorted_photos(folder)],
+                             ["photo1.jpg","photo2.jpg","photo9.gif","photo10.jpg"])
+
 
 if __name__ == "__main__":
     unittest.main()
