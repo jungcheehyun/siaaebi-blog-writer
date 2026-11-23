@@ -29,6 +29,27 @@ class DraftParsingTests(unittest.TestCase):
         self.assertEqual(data["blocks"][2]["value"], "A.")
         self.assertEqual(data["blocks"][3]["value"], "가게 외관이 눈에 띄었어요\n다음 줄도 짧게 적어요")
 
+    def test_camera_emoji_photo_marker_is_image(self):
+        data = parse_pasted_draft(
+            "후킹 제목\n[부제목] 의정부 순대국 복실네\nQ. 외관은?\n"
+            "📷 사진 1 — 식당 외관\nA.\n정감이 가는 곳이에요",
+            self.photos)
+        self.assertEqual(
+            [block["type"] for block in data["blocks"]],
+            ["hero_quote", "question", "image", "answer_label", "text"])
+        self.assertEqual(data["blocks"][2]["path"], str(self.photos[0]))
+
+    def test_blockquote_subtitle_is_preserved_not_fallback(self):
+        data = parse_pasted_draft(
+            "이 동네 국밥집이 이렇게 맛있다고?\n"
+            "> 의정부 순대국 맛집 복실네 평양찹쌀순대\n"
+            "Q. 외관은?\n📸 사진 1 — 외관\nA.\n좋았어요",
+            self.photos, default_subtitle="잘못된 자동 부제목")
+        self.assertEqual(data["blocks"][0]["type"], "hero_quote")
+        self.assertEqual(
+            data["blocks"][0]["value"],
+            "의정부 순대국 맛집 복실네 평양찹쌀순대")
+
     def test_bracketed_marker(self):
         data = parse_pasted_draft("제목\n[사진 2]", self.photos)
         self.assertEqual(data["blocks"][0]["type"], "image")
