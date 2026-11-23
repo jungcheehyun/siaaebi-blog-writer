@@ -148,22 +148,41 @@ class DraftParsingTests(unittest.TestCase):
                              ["photo1.jpg","photo2.jpg","photo9.gif","photo10.jpg"])
 
 
-    def test_final_review_is_a_separate_frame_quote(self):
-        draft=("이런 돼지갈비집이 있다고?\n"
-               "[부제목] 양촌리 돼지갈비 맛집\n"
-               "Q. 외관은 어떤가요?\n"
-               "📸 사진 1 — 외관\n"
-               "A.\n큼직한 건물이 인상적이에요\n"
+    def test_legacy_total_review_converts_to_prose_frame(self):
+        draft=("궁금증 유발 제목\n[부제목] 양촌리 맛집\n"
+               "Q. 외관이 어때요?\n[사진 1]\nA.\n크고 멋져요\n"
                "Q. 의정부 양촌리 총평은 어떨까요?\n"
-               "A.\n가족외식 장소로 좋았어요\n"
-               "시아애비였습니다\n"
+               "A.\n가족외식 장소로 좋아요\n시아애비였습니다\n"
                "#의정부양촌리 #돼지갈비")
         data=parse_pasted_draft(draft,self.photos)
+        self.assertEqual([b["type"] for b in data["blocks"]],
+                         ["hero_quote","question","image","answer_label","text",
+                          "final_quote","text"])
+        self.assertNotIn("Q.",data["blocks"][-2]["value"])
+        self.assertNotIn("A.",data["blocks"][-2]["value"])
+        self.assertIn("가족외식",data["blocks"][-2]["value"])
+        self.assertEqual(data["blocks"][-1]["value"],"#의정부양촌리 #돼지갈비")
+
+    def test_explicit_final_frame_marker(self):
+        raw=("의정부에 이렇게 큰 고깃집이?\n[부제목] 양촌리 돼지갈비 맛집\n"
+             "Q. 외관은?\n[사진 1]\nA.\n넓어요\n"
+             "[마무리]\n가족외식 장소로 좋았어요\n"
+             "오늘도 맛있는 하루 보내세요\n시아애비였습니다\n"
+             "#의정부양촌리")
+        data=parse_pasted_draft(raw,self.photos)
+        self.assertEqual([b["type"] for b in data["blocks"]][-2:],
+                         ["final_quote","text"])
+        self.assertEqual(data["blocks"][-2]["value"],
+                         "가족외식 장소로 좋았어요\n오늘도 맛있는 하루 보내세요\n시아애비였습니다")
+
+    def test_generated_final_quote_has_no_question_or_answer(self):
+        from app import compose
+        data=compose("의정부 양촌리","돼지갈비","",self.photos[:1],
+                     sections=[{"q":"외관은?","a":"큰 건물이에요"}])
         kinds=[b["type"] for b in data["blocks"]]
-        self.assertEqual(kinds, ["hero_quote","question","image","answer_label",
-                                 "text","final_quote","answer_label","text","text"])
-        self.assertEqual(data["blocks"][-4]["value"],"Q. 의정부 양촌리 총평은 어떨까요?")
-        self.assertIn("#의정부양촌리",data["blocks"][-1]["value"])
+        self.assertEqual(kinds[-2:],["final_quote","text"])
+        self.assertNotIn("Q.",data["blocks"][-2]["value"])
+        self.assertIn("시아애비",data["blocks"][-2]["value"])
 
     def test_normal_question_keeps_question_quote_style(self):
         data=parse_pasted_draft("제목\nQ. 메뉴는 어떤가요?\nA.\n좋아요",self.photos)
