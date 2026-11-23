@@ -43,8 +43,71 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $source = Get-Content app.py -Raw -Encoding utf8
-          if ($source -notmatch "(?m)^APP_VERSION = '(v[0-9]+(?:\.[0-9]+)*)'$") { throw "Unable to read app version" }
-          $tag = $Matches[1]
+          $line = ($source -split "\r?\n" | Where-Object { $_ -match '^APP_VERSION\s*=' } | Select-Object -First 1)
+          if (!$line) { throw "Unable to locate APP_VERSION" }
+          $tag = ($line -split "'")[1]
+          if ($tag -notmatch '^v[0-9]+(\.[0-9]+)+
+          "SIA_VERSION=$tag" >> $env:GITHUB_ENV
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            # PR smoke test uses last published release while app build runs separately.
+            $tag = gh release view --json tagName --jq '.tagName'
+            if (!$tag) { throw "No released Windows app" }
+            "SIA_VERSION=$tag" >> $env:GITHUB_ENV
+          } else {
+            $found = $false
+            for ($i=0; $i -lt 90; $i++) {
+              gh release view "$tag" --json assets --jq '.assets[].name' 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { $found=$true; break }
+              Start-Sleep -Seconds 10
+            }
+            if (!$found) { throw "Matching app release $tag was not published" }
+          }
+          New-Item -ItemType Directory -Force installer/payload/app | Out-Null
+          gh release download "$tag" --pattern "siaaebi-update.zip*" --dir installer/payload --clobber
+          if ($LASTEXITCODE -ne 0) { throw "App package download failed" }
+          @'
+          from pathlib import Path
+          import hashlib
+          folder=Path("installer/payload")
+          payload=folder/"siaaebi-update.zip"
+          expected=(folder/"siaaebi-update.zip.sha256").read_text().split()[0].lower()
+          assert hashlib.sha256(payload.read_bytes()).hexdigest() == expected, "Update SHA256 mismatch"
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Release integrity check failed" }
+          Expand-Archive -LiteralPath installer/payload/siaaebi-update.zip -DestinationPath installer/payload/app -Force
+          foreach ($exe in @("SiaAebiBlogWriter.exe", "SiaAebiUpdater.exe")) {
+            if (!(Test-Path "installer/payload/app/$exe")) { throw "Missing app file: $exe" }
+          }
+          if (!(Test-Path installer/payload/app/_internal)) { throw "PyInstaller dependency folder missing" }
+          if ("${{ github.event_name }}" -ne "pull_request" -and !(Test-Path installer/payload/app/_internal/siaaebi_icon.ico)) {
+            throw "Updated application icon missing from release"
+          }
+      - name: Compile installer with Inno Setup
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Cannot install Inno Setup" }
+          }
+          if (!(Test-Path $compiler)) { throw "Inno Setup compiler missing" }
+          & $compiler "/DSiaVersion=$env:SIA_VERSION" "installer/SiaAebi.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed" }
+          $setup = "installer_dist/SiaAebiBlogWriter_Setup_$env:SIA_VERSION.exe"
+          if (!(Test-Path $setup)) { throw "Installer not found: $setup" }
+          Write-Output "Installer created: $setup"
+          Get-FileHash $setup -Algorithm SHA256
+      - name: Attach installer to the existing release (do not change latest tag)
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = "installer_dist/SiaAebiBlogWriter_Setup_$env:SIA_VERSION.exe"
+          gh release upload "$env:SIA_VERSION" "$setup" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Installer upload failed" }
+          gh release view "$env:SIA_VERSION" --json assets --jq '.assets[].name'
+) { throw "Invalid APP_VERSION: $tag" }
           "SIA_VERSION=$tag" >> $env:GITHUB_ENV
           if ("${{ github.event_name }}" -eq "pull_request") {
             # PR smoke test uses last published release while app build runs separately.
