@@ -611,62 +611,109 @@ def upload_via_naver_button(path, photo_button, notify):
             '네이버 글쓰기 창을 최대화하고 [네이버 사진 버튼 위치 지정 (5초)]으로 '
             '초록색 [사진] 아이콘의 위치를 다시 저장하세요.\n'
             '잘못된 위치에 파일 경로를 입력하지 않고 안전하게 중지했습니다.')
-    # Windows 11 can ignore Alt+N even when the common file picker is visible.
-    # Click the native File name control (ID 1148) first, then verify that
-    # the complete absolute path is actually in that control before opening.
+    # Prefer the actual Windows native File name control over keyboard shortcuts.
+    # On some Windows 11/OneDrive dialogs Alt+N/Ctrl+V targets a different field.
+    import ctypes
     import win32gui
+    from ctypes import wintypes
     dialog = win32gui.GetForegroundWindow()
-    filename_control = win32gui.GetDlgItem(dialog, 1148)
+    if not dialog or win32gui.GetClassName(dialog) != '#32770':
+        raise RuntimeError('Windows 파일 선택 창이 활성화되어 있지 않습니다. 다시 시도해 주세요.')
 
-    def paste_and_verify():
+    def dialog_closed():
+        return not win32gui.IsWindow(dialog)
+
+    def fill_native_filename():
+        """Write and verify the Edit child of the File name combo by HWND."""
+        controls = []
+        name_combo = win32gui.GetDlgItem(dialog, 1148)
+        def collect(child, _):
+            if win32gui.GetClassName(child) == 'Edit' and win32gui.IsWindowVisible(child):
+                rect = win32gui.GetWindowRect(child)
+                if rect[2] - rect[0] > 70 and rect[3] - rect[1] > 10:
+                    controls.append((rect[1], child))
+        if name_combo:
+            if win32gui.GetClassName(name_combo) == 'Edit':
+                collect(name_combo, None)
+            win32gui.EnumChildWindows(name_combo, collect, None)
+        if not controls:
+            # Fallback for a file picker whose filename edit has another ID.
+            dlg_rect = win32gui.GetWindowRect(dialog)
+            win32gui.EnumChildWindows(dialog, collect, None)
+            controls = [item for item in controls
+                        if item[0] > dlg_rect[1] + (dlg_rect[3] - dlg_rect[1]) * .55]
+        if not controls:
+            return False
+        # File name is below the file grid, while Search and Address are above it.
+        edit = sorted(controls, reverse=True)[0][1]
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        user32.SendMessageTimeoutW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                               wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                               ctypes.POINTER(ctypes.c_size_t))
+        user32.SendMessageTimeoutW.restype = wintypes.LPARAM
+        def send(msg, arg, timeout_ms=2500):
+            result = ctypes.c_size_t()
+            ok = user32.SendMessageTimeoutW(edit, msg, 0, arg, 2, timeout_ms, ctypes.byref(result))
+            return bool(ok)
+        full_name = str(path)
+        value = ctypes.create_unicode_buffer(full_name)
+        if not send(0x000C, ctypes.addressof(value)):  # WM_SETTEXT
+            return False
+        check = ctypes.create_unicode_buffer(max(32768, len(full_name) + 1))
+        if not send(0x000D, ctypes.addressof(check)):  # WM_GETTEXT
+            return False
+        return os.path.normcase(check.value.strip().strip('"')) == os.path.normcase(full_name)
+
+    opened = fill_native_filename()
+    if opened:
+        notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
+        # Clicking the actual Open button commits the combo box value.
+        open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
+        if open_button and win32gui.IsWindowVisible(open_button):
+            left, top, right, bottom = win32gui.GetWindowRect(open_button)
+            pyautogui.click((left + right) // 2, (top + bottom) // 2)
+        else:
+            pyautogui.press('enter')
+        for _ in range(28):
+            if dialog_closed():
+                break
+            time.sleep(.25)
+
+    if not dialog_closed():
+        # Fallback 1: use the localized File name shortcut.
+        notify('사진 선택 창이 열려 있어 Alt+N 방식으로 다시 시도합니다')
+        pyautogui.hotkey('alt', 'n')
+        time.sleep(.3)
         pyperclip.copy(str(path))
         pyautogui.hotkey('ctrl', 'a')
         pyautogui.hotkey('ctrl', 'v')
-        time.sleep(.3)
-        # Use a sentinel: otherwise reading the clipboard could accidentally
-        # confirm the string we ourselves copied rather than the edit contents.
-        pyperclip.copy('__SIAAEBI_PICKER_VERIFY__')
-        pyautogui.hotkey('ctrl', 'a')
-        pyautogui.hotkey('ctrl', 'c')
-        time.sleep(.15)
-        captured = pyperclip.paste().strip().strip('"')
-        pyperclip.copy(str(path))
-        return os.path.normcase(captured) == os.path.normcase(str(path))
+        time.sleep(.35)
+        pyautogui.press('enter')
+        for _ in range(20):
+            if dialog_closed():
+                break
+            time.sleep(.25)
 
-    focused = False
-    if filename_control and win32gui.IsWindowVisible(filename_control):
-        left, top, right, bottom = win32gui.GetWindowRect(filename_control)
-        if right - left >= 80 and bottom - top >= 12:
-            pyautogui.click((left + right) // 2, (top + bottom) // 2)
-            time.sleep(.2)
-            focused = paste_and_verify()
-            if focused:
-                notify('사진 파일명 입력 확인 완료 (파일명 칸 직접 클릭): ' + path.name)
-    if not focused:
-        pyautogui.hotkey('alt', 'n')
-        time.sleep(.3)
-        focused = paste_and_verify()
-        if focused:
-            notify('사진 파일명 입력 확인 완료 (Alt+N): ' + path.name)
-    if not focused:
-        raise RuntimeError(
-            '사진 선택 창의 파일 이름 칸에 경로가 들어가지 않았습니다. '
-            '윈도우 파일 창에서 파일 이름 칸을 찾거나 입력하는 데 실패했습니다. '
-            '입력을 중단했습니다: ' + path.name)
-    pyautogui.press('enter')
-    # Wait for the picker to close, rather than blindly typing the next block.
-    deadline=time.monotonic()+12.0
-    import win32gui
-    while time.monotonic()<deadline:
-        try:
-            hwnd=win32gui.GetForegroundWindow()
-            if not hwnd or win32gui.GetClassName(hwnd)!='#32770':break
-        except Exception:break
+    if not dialog_closed():
+        # Fallback 2: Windows Open dialog accepts a full path in the address bar.
+        notify('파일 이름 입력이 실패하여 경로 표시줄로 재시도합니다')
+        pyautogui.hotkey('ctrl', 'l')
         time.sleep(.25)
-    else:
-        raise RuntimeError(f'사진 선택 창이 닫히지 않았습니다: {path.name}. 파일 이름 오류를 확인해 주세요.')
-    time.sleep(3.0 if path.suffix.lower()!='.gif' else 4.5)
-    notify('사진 선택 창 처리 완료: '+path.name+' — 화면에서 업로드 결과를 확인해 주세요.')
+        pyperclip.copy(str(path))
+        pyautogui.hotkey('ctrl', 'v')
+        time.sleep(.3)
+        pyautogui.press('enter')
+        for _ in range(24):
+            if dialog_closed():
+                break
+            time.sleep(.25)
+
+    if not dialog_closed():
+        raise RuntimeError('사진 선택 창에 파일 경로를 입력했지만 창이 닫히지 않았습니다. '
+                           '사진 파일을 수동으로 선택할 수 있다면 Windows 파일명 입력 컨트롤 차이일 수 있습니다: '
+                           + path.name)
+    time.sleep(3.0 if path.suffix.lower() != '.gif' else 4.5)
+    notify('사진 선택 완료: ' + path.name + ' — 네이버 본문에서 이미지 업로드를 확인하세요')
 
 
 def apply_quote(quote_button, quote_style, notify):
