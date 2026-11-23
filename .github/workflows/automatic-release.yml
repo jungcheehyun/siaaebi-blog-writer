@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - app.py
+      - installer/create_icon.py
       - exe_updater.py
       - requirements.txt
       - make_release.py
@@ -76,11 +77,18 @@ jobs:
           python -m py_compile app.py
           python -m unittest -v test_draft_parser.py
           if ($LASTEXITCODE -ne 0) { throw 'Draft parsing tests failed' }
+      - name: Create baby-pencil icon
+        if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          python installer/create_icon.py
+          if ($LASTEXITCODE -ne 0) { throw 'Mascot icon generator failed' }
+          if (!(Test-Path installer/siaaebi_icon.ico) -or !(Test-Path installer/siaaebi_icon.png)) { throw 'Icon assets missing' }
       - name: Build EXEs
         if: steps.existing.outputs.exists == 'false' || github.event_name == 'pull_request'
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onedir --name SiaAebiBlogWriter --collect-all playwright --collect-all PIL app.py
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name SiaAebiBlogWriter --icon installer/siaaebi_icon.ico --add-data "installer/siaaebi_icon.ico;." --add-data "installer/siaaebi_icon.png;." --collect-all playwright --collect-all PIL app.py
           if ($LASTEXITCODE -ne 0) { throw 'App build failed' }
           python -m PyInstaller --noconfirm --clean --windowed --onefile --name SiaAebiUpdater exe_updater.py
           if ($LASTEXITCODE -ne 0) { throw 'Updater build failed' }
@@ -101,6 +109,8 @@ jobs:
           assert hashlib.sha256(zipfile_path.read_bytes()).hexdigest() == checksum
           with zipfile.ZipFile(zipfile_path) as z:
               assert 'SiaAebiBlogWriter.exe' in z.namelist()
+              assert '_internal/siaaebi_icon.ico' in z.namelist()
+              assert '_internal/siaaebi_icon.png' in z.namelist()
           '@ | python -
       - name: Publish latest GitHub release
         if: github.event_name != 'pull_request' && steps.existing.outputs.exists == 'false'
