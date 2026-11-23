@@ -148,5 +148,28 @@ class DraftParsingTests(unittest.TestCase):
                              ["photo1.jpg","photo2.jpg","photo9.gif","photo10.jpg"])
 
 
+    def test_final_review_is_a_separate_frame_quote(self):
+        draft=("이런 돼지갈비집이 있다고?\n"
+               "[부제목] 양촌리 돼지갈비 맛집\n"
+               "Q. 외관은 어떤가요?\n"
+               "📸 사진 1 — 외관\n"
+               "A.\n큼직한 건물이 인상적이에요\n"
+               "Q. 의정부 양촌리 총평은 어떨까요?\n"
+               "A.\n가족외식 장소로 좋았어요\n"
+               "시아애비였습니다\n"
+               "#의정부양촌리 #돼지갈비")
+        data=parse_pasted_draft(draft,self.photos)
+        kinds=[b["type"] for b in data["blocks"]]
+        self.assertEqual(kinds, ["hero_quote","question","image","answer_label",
+                                 "text","final_quote","answer_label","text"])
+        self.assertEqual(data["blocks"][-3]["value"],"Q. 의정부 양촌리 총평은 어떨까요?")
+        self.assertIn("#의정부양촌리",data["blocks"][-1]["value"])
+
+    def test_normal_question_keeps_question_quote_style(self):
+        data=parse_pasted_draft("제목\nQ. 메뉴는 어떤가요?\nA.\n좋아요",self.photos)
+        self.assertEqual(data["blocks"][0]["type"],"question")
+        self.assertEqual(data["blocks"][1]["value"],"A.")
+
+
 if __name__ == "__main__":
     unittest.main()
