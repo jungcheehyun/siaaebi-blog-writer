@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """시아애비 블로그 자동작성기: Windows 전용, 사용자 확인 후 네이버 임시저장 시도."""
-import os, re, io, json, time, threading, queue, webbrowser, html, urllib.request, urllib.error, hashlib, tempfile, subprocess, sys
+import os, re, io, json, time, threading, queue, webbrowser, html, urllib.request, urllib.error, hashlib, tempfile, subprocess, sys, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.6'
+APP_VERSION = 'v18.7'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -479,9 +479,21 @@ def upload_via_naver_button(path, photo_button, notify):
     if not path.is_file():
         raise FileNotFoundError(f'사진 파일이 존재하지 않습니다: {path}\n원고 생성 후 사진 폴더를 옮겼다면 원고를 다시 생성하세요.')
     if not _wait_for_native_file_dialog(timeout=.3):
-        pyautogui.click(*photo_button)
+        # Naver SmartEditor toolbar: click the green '사진' icon itself,
+        # not the media menu or the editor body.
+        x, y = photo_button
+        width, height = pyautogui.size()
+        if not (0 <= x < width and 0 <= y < height):
+            raise RuntimeError(f'저장된 사진 버튼 좌표 {(x, y)}가 현재 화면 범위를 벗어났습니다. 위치를 다시 지정하세요.')
+        notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
+        pyautogui.moveTo(x, y, duration=.3)
+        pyautogui.click(x=x, y=y)
     if not _wait_for_native_file_dialog(timeout=8.0):
-        raise RuntimeError('사진 선택 창을 확인하지 못했습니다. 본문에 파일 경로를 입력하지 않고 중지합니다.\n사진 버튼 좌표, 네이버 화면 위치, 첨부 메뉴를 확인하세요.')
+        raise RuntimeError(
+            '상단 [사진] 버튼 클릭 후 Windows 파일 선택 창을 확인하지 못했습니다.\n'
+            '네이버 글쓰기 창을 최대화하고 [네이버 사진 버튼 위치 지정 (5초)]으로 '
+            '초록색 [사진] 아이콘의 위치를 다시 저장하세요.\n'
+            '잘못된 위치에 파일 경로를 입력하지 않고 안전하게 중지했습니다.')
     # Windows common file dialog: Alt+N focuses the File name edit.
     pyautogui.hotkey('alt','n')
     time.sleep(.25)
@@ -676,7 +688,7 @@ class App:
         self.view=tk.Text(main,height=24,wrap='word');self.view.pack(fill='both',expand=True,pady=6)
         self.status=tk.StringVar(value='원고를 붙여넣고 미리보기 또는 입력을 누르세요.')
         ttk.Label(main,textvariable=self.status,wraplength=700,foreground='#175b80').pack(anchor='w',pady=7)
-        ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 사진 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
+        ttk.Label(main,text='주의: Windows 네이버 에디터에서만 테스트하세요. 네이버 상단 초록색 [사진] 버튼 위치를 먼저 지정해야 합니다. 실제 인용구 메뉴 위치를 지정해 클릭합니다. 네이버 UI 변경 시 실패할 수 있습니다.\n본문은 약 850자/분 Unicode 키 입력, 사진/GIF는 네이버 첨부 버튼으로 시도합니다. 사진이 바로 뒤따르지 않는 인용구 뒤에는 기본 500px 아래를 클릭하고, 사진 뒤에는 Enter를 누르지 않습니다. F7은 입력 시작, F8은 일시정지/이어쓰기, F9는 중지입니다. 사진 첨부 중에는 완료 후 적용될 수 있습니다. 임시저장은 수동입니다. 입력 중 키보드/마우스를 건드리지 마세요.',foreground='#9a4d12',wraplength=700).pack(anchor='w')
         threading.Thread(target=self.start_hotkeys,daemon=True).start()
     def set_saved_positions_status(self):
         count = sum(getattr(self, field) is not None for field in POSITION_FIELDS)
@@ -764,9 +776,16 @@ class App:
                 archive = prepare_update(assets)
                 if not getattr(sys, 'frozen', False):
                     raise RuntimeError('이 버전의 업데이트는 EXE로 실행할 때 지원됩니다.')
-                updater = ROOT.parent / 'SiaAebiUpdater.exe'
-                if not updater.is_file():
-                    raise FileNotFoundError('SiaAebiUpdater.exe가 없습니다. 설치 폴더 전체를 유지하세요.')
+                # Copy the updater OUTSIDE the folder it needs to replace,
+                # so Windows can release/rename the entire app folder.
+                updater_source = ROOT / 'SiaAebiUpdater.exe'
+                if not updater_source.is_file():
+                    updater_source = ROOT.parent / 'SiaAebiUpdater.exe'  # legacy installations
+                if not updater_source.is_file():
+                    raise FileNotFoundError('업데이트 실행 파일이 없습니다. GitHub 설치 패키지의 SiaAebiUpdater.exe가 필요합니다.')
+                updater_dir = Path(tempfile.mkdtemp(prefix='siaaebi_updater_'))
+                updater = updater_dir / 'SiaAebiUpdater.exe'
+                shutil.copy2(updater_source, updater)
                 subprocess.Popen([str(updater), '--archive', str(archive),
                                   '--folder', str(ROOT), '--pid', str(os.getpid())],
                                  cwd=str(ROOT.parent), creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -825,7 +844,7 @@ class App:
         except Exception as e:return messagebox.showerror('원고 확인',str(e))
         if not all(getattr(self, field) for field in POSITION_FIELDS):
             return messagebox.showwarning('확인','사진/본문/인용구 위치가 일부 비어 있습니다. 빠진 위치만 지정하세요')
-        if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n사진 버튼 위치를 미리 지정해야 하며 첨부 메뉴 구조에 따라 실패할 수 있습니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
+        if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
         self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
     def begin(self):
