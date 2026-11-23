@@ -98,5 +98,37 @@ class DraftParsingTests(unittest.TestCase):
         self.assertIn("돼지갈비",title)
 
 
+    def test_legacy_coordinates_require_body_recapture(self):
+        import json
+        from unittest.mock import patch
+        import app
+        with tempfile.TemporaryDirectory() as folder:
+            config=Path(folder)/"positions.json"
+            config.write_text(json.dumps({"body_point":[800,450],
+                                          "photo_button":[300,200],
+                                          "quote_exit_offset":500}),encoding="utf-8")
+            with patch.object(app,"CONFIG_PATH",config):
+                saved=app.load_editor_positions()
+            self.assertEqual(saved["body_point"],(800,450))
+            self.assertFalse(saved["body_anchor_verified"])
+
+    def test_new_verified_body_position_is_persisted(self):
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import app
+        with tempfile.TemporaryDirectory() as folder:
+            config=Path(folder)/"positions.json"
+            values=SimpleNamespace(
+                body_anchor_verified=True,
+                quote_exit_offset=SimpleNamespace(get=lambda: 500),
+                **{name:(700,430) for name in app.POSITION_FIELDS})
+            with patch.object(app,"CONFIG_DIR",Path(folder)), patch.object(app,"CONFIG_PATH",config):
+                app.save_editor_positions(values)
+                saved=app.load_editor_positions()
+            self.assertTrue(saved["body_anchor_verified"])
+            self.assertEqual(saved["body_point"],(700,430))
+
+
 if __name__ == "__main__":
     unittest.main()
