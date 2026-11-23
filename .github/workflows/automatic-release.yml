@@ -83,6 +83,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force SiaAebi_Install/app | Out-Null
           Copy-Item dist/SiaAebiBlogWriter/* SiaAebi_Install/app/ -Recurse -Force
+          Copy-Item dist/SiaAebiUpdater.exe SiaAebi_Install/app/SiaAebiUpdater.exe -Force
           python make_release.py
           if ($LASTEXITCODE -ne 0) { throw 'Package failed' }
           @'
