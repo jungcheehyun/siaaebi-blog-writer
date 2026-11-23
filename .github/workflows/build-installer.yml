@@ -40,14 +40,14 @@ jobs:
       - name: Download and validate matching Windows app release
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $source = Get-Content app.py -Raw -Encoding utf8
           $line = ($source -split "\r?\n" | Where-Object { $_ -match '^APP_VERSION\s*=' } | Select-Object -First 1)
           if (!$line) { throw "Unable to locate APP_VERSION" }
           $tag = ($line -split "'")[1]
           if ($tag -notmatch '^v[0-9]+(\.[0-9]+)+$') { throw "Invalid APP_VERSION: $tag" }
-          if ("\${{ github.event_name }}" -eq "pull_request") {
+          if ("${{ github.event_name }}" -eq "pull_request") {
             $tag = gh release view --json tagName --jq '.tagName'
             if (!$tag) { throw "No released Windows app" }
           } else {
@@ -77,7 +77,7 @@ jobs:
             if (!(Test-Path "installer/payload/app/$exe")) { throw "Missing app file: $exe" }
           }
           if (!(Test-Path installer/payload/app/_internal)) { throw "PyInstaller dependency folder missing" }
-          if ("\${{ github.event_name }}" -ne "pull_request" -and !(Test-Path installer/payload/app/_internal/siaaebi_icon.ico)) {
+          if ("${{ github.event_name }}" -ne "pull_request" -and !(Test-Path installer/payload/app/_internal/siaaebi_icon.ico)) {
             throw "Updated application icon missing from release"
           }
       - name: Compile installer with Inno Setup

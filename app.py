@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.15'
+APP_VERSION = 'v18.16'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -273,10 +273,10 @@ def clean_data(data):
     return data
 
 
-PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
+PHOTO_MARKER=re.compile(r'^\s*(?:📸|📷|🖼️?)?\s*\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
 SUBTITLE_MARKER = re.compile(r'^(?:\[부제목\]\s*|부제목\s*[:：]\s*)(.+)$', re.I)
 FINAL_MARKER = re.compile(r'^(?:\[마무리\]|\[총평\]|마무리\s*[:：]|총평\s*[:：])\s*(.*)$',re.I)
-PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–:-]\s*.*)?\s*$', re.I)
+PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸|📷|🖼️?)?\s*사진\s*([0-9]+)(?:\s*[—–:-]\s*.*)?\s*$', re.I)
 
 def strip_draft_markdown(value):
     """Remove copy/pasted Markdown styling from standalone lines."""
@@ -327,11 +327,12 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
             continue
         subtitle_match=SUBTITLE_MARKER.fullmatch(line)
         markdown_subtitle=re.match(r'^#{2,4}\s+(.+)$',line) if title and not blocks and not buf else None
-        if subtitle_match or markdown_subtitle:
+        quote_subtitle=re.match(r'^>\s*(.+)$',line) if title and not blocks and not buf else None
+        if subtitle_match or markdown_subtitle or quote_subtitle:
             flush()
             if any(b['type']=='hero_quote' for b in blocks):
                 raise ValueError('부제목 인용구는 하나만 사용할 수 있습니다.')
-            value=(subtitle_match or markdown_subtitle).group(1).strip()
+            value=(subtitle_match or markdown_subtitle or quote_subtitle).group(1).strip()
             if not value: raise ValueError('부제목 내용을 입력하세요.')
             blocks.append({'type':'hero_quote','value':value})
             continue
@@ -358,7 +359,7 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
         if default_subtitle and str(default_subtitle).strip():
             blocks.insert(0,{'type':'hero_quote','value':str(default_subtitle).strip()})
     unresolved=[b['value'] for b in blocks if b['type']=='text'
-                and re.search(r'(?m)^\s*(?:📸\s*)?사진\s*\d+\b',b['value'])]
+                and re.search(r'(?m)^\s*(?:📸|📷|🖼️?)?\s*사진\s*\d+\b',b['value'])]
     if unresolved:
         raise ValueError('인식할 수 없는 사진 표시가 있습니다. [사진 1] 또는 📸 사진 1 — 설명 형식을 사용하세요.')
     if not blocks:raise ValueError('원고를 입력하세요.')
@@ -610,12 +611,48 @@ def upload_via_naver_button(path, photo_button, notify):
             '네이버 글쓰기 창을 최대화하고 [네이버 사진 버튼 위치 지정 (5초)]으로 '
             '초록색 [사진] 아이콘의 위치를 다시 저장하세요.\n'
             '잘못된 위치에 파일 경로를 입력하지 않고 안전하게 중지했습니다.')
-    # Windows common file dialog: Alt+N focuses the File name edit.
-    pyautogui.hotkey('alt','n')
-    time.sleep(.25)
-    pyperclip.copy(str(path))
-    pyautogui.hotkey('ctrl','v')
-    time.sleep(.3)
+    # Windows 11 can ignore Alt+N even when the common file picker is visible.
+    # Click the native File name control (ID 1148) first, then verify that
+    # the complete absolute path is actually in that control before opening.
+    import win32gui
+    dialog = win32gui.GetForegroundWindow()
+    filename_control = win32gui.GetDlgItem(dialog, 1148)
+
+    def paste_and_verify():
+        pyperclip.copy(str(path))
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.hotkey('ctrl', 'v')
+        time.sleep(.3)
+        # Use a sentinel: otherwise reading the clipboard could accidentally
+        # confirm the string we ourselves copied rather than the edit contents.
+        pyperclip.copy('__SIAAEBI_PICKER_VERIFY__')
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.hotkey('ctrl', 'c')
+        time.sleep(.15)
+        captured = pyperclip.paste().strip().strip('"')
+        pyperclip.copy(str(path))
+        return os.path.normcase(captured) == os.path.normcase(str(path))
+
+    focused = False
+    if filename_control and win32gui.IsWindowVisible(filename_control):
+        left, top, right, bottom = win32gui.GetWindowRect(filename_control)
+        if right - left >= 80 and bottom - top >= 12:
+            pyautogui.click((left + right) // 2, (top + bottom) // 2)
+            time.sleep(.2)
+            focused = paste_and_verify()
+            if focused:
+                notify('사진 파일명 입력 확인 완료 (파일명 칸 직접 클릭): ' + path.name)
+    if not focused:
+        pyautogui.hotkey('alt', 'n')
+        time.sleep(.3)
+        focused = paste_and_verify()
+        if focused:
+            notify('사진 파일명 입력 확인 완료 (Alt+N): ' + path.name)
+    if not focused:
+        raise RuntimeError(
+            '사진 선택 창의 파일 이름 칸에 경로가 들어가지 않았습니다. '
+            '윈도우 파일 창에서 파일 이름 칸을 찾거나 입력하는 데 실패했습니다. '
+            '입력을 중단했습니다: ' + path.name)
     pyautogui.press('enter')
     # Wait for the picker to close, rather than blindly typing the next block.
     deadline=time.monotonic()+12.0
@@ -1017,7 +1054,7 @@ class App:
     def current_draft(self):
         raw=self.view.get('1.0','end').strip()
         if not raw:raise ValueError('원고를 붙여넣어 주세요.')
-        explicit_subtitle=bool(re.search(r'(?m)^\s*(?:\[부제목\]|부제목\s*[:：]|#{2,4}\s+)',raw))
+        explicit_subtitle=bool(re.search(r'(?m)^\s*(?:\[부제목\]|부제목\s*[:：]|#{2,4}\s+|>\s*\S)',raw))
         if not explicit_subtitle and not self.shop.get().strip():
             raise ValueError('부제목 인용구에 넣을 상호명이 없습니다. 상호명을 입력하거나 원고 둘째 줄에 [부제목] 양촌리 돼지갈비 맛집 형식으로 추가하세요.')
         fallback=make_subtitle(self.shop.get(),self.menu.get(),self.keywords.get('1.0','end').strip()) if not explicit_subtitle else None
