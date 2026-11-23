@@ -17,8 +17,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: siaaebi-release
-  cancel-in-progress: false
+  group: siaaebi-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-release:
