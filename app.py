@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.10'
+APP_VERSION = 'v18.11'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -84,15 +84,17 @@ def load_editor_positions():
                 result[key] = tuple(point)
         offset = data.get('quote_exit_offset', 500)
         result['quote_exit_offset'] = offset if isinstance(offset, int) and 100 <= offset <= 1500 else 500
+        result['body_anchor_verified'] = data.get('body_anchor_verified') is True
         return result
     except (OSError, ValueError, TypeError):
-        return {'quote_exit_offset': 500}
+        return {'quote_exit_offset': 500, 'body_anchor_verified': False}
 
 def save_editor_positions(values):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     payload = {key: list(getattr(values, key)) if getattr(values, key) else None
                for key in POSITION_FIELDS}
     payload['quote_exit_offset'] = int(values.quote_exit_offset.get())
+    payload['body_anchor_verified'] = bool(getattr(values,'body_anchor_verified',False))
     tmp = CONFIG_PATH.with_suffix('.tmp')
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     tmp.replace(CONFIG_PATH)
@@ -638,8 +640,12 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
         raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
     check_control(pause_event,stop_event)
     pyautogui.press('enter')
-    time.sleep(.65)
-    notify('제목 입력 완료 — Enter로 본문으로 이동했습니다. 인사말이 제목에 이어지면 즉시 F9로 중지하세요.')
+    time.sleep(.5)
+    if body_point[1] <= quote_button[1] + 90:
+        raise RuntimeError('본문 좌표가 상단 도구막대에 너무 가깝습니다. 네이버 글쓰기 본문 첫 줄을 다시 지정하세요.')
+    pyautogui.click(*body_point)
+    time.sleep(.55)
+    notify(f'제목과 본문 분리: 본문 좌표 {body_point} 클릭 완료')
     previous=None
     blocks=data['blocks']
     for i,b in enumerate(blocks):
@@ -717,7 +723,10 @@ class App:
         main=ttk.Frame(root,padding=15);main.pack(fill='both',expand=True)
         ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',21,'bold')).pack(anchor='w',pady=(0,3))
         ttk.Label(main,text='원고 작성부터 사진 첨부까지  ·  '+APP_VERSION,
-                  foreground='#64748B').pack(anchor='w',pady=(0,14))
+                  foreground='#64748B').pack(anchor='w',pady=(0,8))
+        self.status_saved=tk.StringVar(value='좌표 읽는 중')
+        ttk.Label(main,textvariable=self.status_saved,foreground='#175b80',
+                  wraplength=980,font=('맑은 고딕',10,'bold')).pack(anchor='w',pady=(0,10))
         for title,var in [('사진 폴더',self.folder),('상호명',self.shop),('대표 메뉴',self.menu)]:
             row=ttk.Frame(main);row.pack(fill='x',pady=4)
             ttk.Label(row,text=title,width=12).pack(side='left')
@@ -756,6 +765,7 @@ class App:
         saved_positions = load_editor_positions()
         for field in POSITION_FIELDS:
             setattr(self, field, saved_positions.get(field))
+        self.body_anchor_verified=saved_positions.get('body_anchor_verified',False)
         self.quote_exit_offset=tk.IntVar(value=saved_positions.get('quote_exit_offset',500))
         self.quote_exit_offset.trace_add('write', self.save_positions_if_valid)
         ttk.Label(main,text='전역 단축키: F7 입력 시작 · F8 일시정지/이어쓰기 · F9 중지',foreground='#175b80').pack(anchor='w')
@@ -767,7 +777,7 @@ class App:
         positions_toggle=ttk.Checkbutton(main,text='네이버 위치 설정 펼치기',variable=self.positions_open,command=toggle_positions)
         positions_toggle.pack(anchor='w')
         ttk.Button(positions_panel,text='네이버 사진 버튼 위치 지정 (5초)',command=self.capture_photo_button).pack(anchor='w',pady=(0,5))
-        ttk.Button(positions_panel,text='본문 시작 위치 지정 (5초)',command=lambda:self.capture_point('body_point','본문 첫 줄 입력 위치')).pack(anchor='w')
+        ttk.Button(positions_panel,text='본문 첫 줄 다시 지정 (필수 · 5초)',command=lambda:self.capture_point('body_point','제목 아래 흰색 본문 첫 줄 (제목 칸 아님!)')).pack(anchor='w')
         ttk.Button(positions_panel,text='인용구 메뉴 버튼 지정 (5초)',command=lambda:self.capture_point('quote_button','네이버 인용구 메뉴 버튼')).pack(anchor='w')
         ttk.Button(positions_panel,text='부제목용 따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('subtitle_quote_style','펼쳐진 인용구 메뉴의 따옴표 스타일')).pack(anchor='w')
         ttk.Button(positions_panel,text='Q용 라인&따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('question_quote_style','펼쳐진 인용구 메뉴의 네 번째 라인&따옴표 스타일')).pack(anchor='w')
@@ -791,13 +801,12 @@ class App:
         threading.Thread(target=self.start_hotkeys,daemon=True).start()
     def set_saved_positions_status(self):
         count = sum(getattr(self, field) is not None for field in POSITION_FIELDS)
-        self.status_saved = getattr(self, 'status_saved', tk.StringVar())
-        self.status_saved.set(f'저장된 위치: {count}/6 · 설정 경로: {CONFIG_PATH}')
-        if not hasattr(self, '_saved_label'):
-            self._saved_label=ttk.Label(self.root, textvariable=self.status_saved,
-                                        foreground='#175b80',wraplength=700)
-            # Status shown at bottom, without disturbing existing controls
-            self._saved_label.pack(side='bottom',anchor='w',padx=15,pady=(0,4))
+        names = [('사진', 'photo_button'), ('본문', 'body_point'), ('인용구', 'quote_button'),
+                 ('부제목', 'subtitle_quote_style'), ('질문', 'question_quote_style'),
+                 ('마무리', 'final_quote_style')]
+        positions='  |  '.join(f'{name}: {getattr(self, field) or "미설정"}' for name,field in names)
+        body_flag='본문 재지정 필요' if not self.body_anchor_verified else '본문 확인됨'
+        self.status_saved.set(f'저장 좌표 {count}/6 · {body_flag}\n{positions}')
 
     def save_positions_if_valid(self,*_):
         try:
@@ -810,6 +819,7 @@ class App:
     def reset_positions(self):
         if not messagebox.askyesno('위치 초기화','저장된 사진/본문/인용구 버튼 위치를 모두 초기화할까요?'):return
         for field in POSITION_FIELDS:setattr(self,field,None)
+        self.body_anchor_verified=False
         self.quote_exit_offset.set(500)
         self.save_positions_if_valid()
         self.set_saved_positions_status()
@@ -823,6 +833,7 @@ class App:
             time.sleep(5)
             pos=pyautogui.position()
             setattr(self,field,(pos.x,pos.y))
+            if field == 'body_point': self.body_anchor_verified=True
             self.save_positions_if_valid()
             self.root.after(0,self.set_saved_positions_status)
             self.setstatus(description+f' 위치 저장: {(pos.x,pos.y)}')
@@ -953,6 +964,14 @@ class App:
         except Exception as e:return messagebox.showerror('원고 확인',str(e))
         if not all(getattr(self, field) for field in POSITION_FIELDS):
             return messagebox.showwarning('확인','사진/본문/인용구 위치가 일부 비어 있습니다. 빠진 위치만 지정하세요')
+        if not self.body_anchor_verified:
+            return messagebox.showwarning('본문 위치 재설정 필요',
+                '제목에 부제목이 붙는 문제를 방지하려면 [네이버 위치 설정 펼치기] → '
+                '[본문 첫 줄 다시 지정 (필수 · 5초)]을 눌러 제목 아래 실제 본문 칸에 마우스를 올려 저장해 주세요.')
+        if self.body_point[1] <= self.quote_button[1]+90:
+            return messagebox.showwarning('본문 위치 확인',
+                '저장된 본문 좌표가 도구막대 또는 제목 칸일 수 있습니다. '
+                '네이버 글쓰기 화면의 제목 아래 본문 첫 줄을 다시 지정하세요.')
         if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
         self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
