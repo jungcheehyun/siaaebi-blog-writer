@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.8'
+APP_VERSION = 'v18.9'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -437,6 +437,16 @@ def check_control(pause_event=None, stop_event=None):
     if stop_event is not None and stop_event.is_set():
         raise InputCancelled('F9로 자동 입력을 중지했습니다')
 
+def safe_naver_typing_text(value):
+    """Avoid replacement diamonds from unsupported astral emoji/variation selectors."""
+    result = []
+    for ch in str(value):
+        cp = ord(ch)
+        if ch == '\ufffd' or cp > 0xFFFF or cp in (0x200D, 0x20E3) or 0xFE00 <= cp <= 0xFE0F:
+            continue
+        result.append(ch)
+    return ''.join(result)
+
 def type_unicode_text(value, chars_per_minute=850, pause_event=None, stop_event=None):
     """Windows Unicode SendInput: key events, not clipboard paste.
     500 characters/minute is only an approximation of Korean 500 타/minute.
@@ -454,7 +464,7 @@ def type_unicode_text(value, chars_per_minute=850, pause_event=None, stop_event=
     class INPUT(ctypes.Structure):
         _fields_=[('type',wintypes.DWORD),('union',_INPUT_UNION)]
     delay=60.0/max(1,chars_per_minute)
-    for char in tidy_text(value):
+    for char in tidy_text(safe_naver_typing_text(value)):
         check_control(pause_event,stop_event)
         if char=='\n':
             pyautogui.press('enter')
@@ -578,12 +588,15 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
     if missing:
         raise FileNotFoundError('사진이 이동되거나 삭제되었습니다. 사진 폴더를 다시 선택하고 원고를 새로 생성하세요: '+str(missing[0]))
     type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
-    # Do NOT use Tab: in SmartEditor it can keep focus in the title field.
-    # Click a user-captured point inside the actual body instead.
+    # Naver SmartEditor: Enter from the title transitions to the first body paragraph.
+    # A previously saved body_point may now hit the title, concatenating the intro.
+    # Do not click the old coordinate here; keep it for quote-exit only.
     if not body_point:
-        raise RuntimeError('본문 시작 위치가 지정되지 않았습니다')
-    pyautogui.click(*body_point)
-    time.sleep(.55)
+        raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
+    check_control(pause_event,stop_event)
+    pyautogui.press('enter')
+    time.sleep(.65)
+    notify('제목 입력 완료 — Enter로 본문으로 이동했습니다. 인사말이 제목에 이어지면 즉시 F9로 중지하세요.')
     previous=None
     blocks=data['blocks']
     for i,b in enumerate(blocks):
