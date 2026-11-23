@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.16'
+APP_VERSION = 'v18.17'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -719,8 +719,9 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
     """Foreground keyboard entry; never publishes or saves."""
     import pyautogui
     pyautogui.PAUSE=.08
-    webbrowser.open('https://blog.naver.com/')
-    notify('네이버 글쓰기 화면의 제목 칸을 클릭한 뒤 F7 또는 [입력 시작]을 누르세요')
+    # Do not open another Naver tab on Input Start / F7.
+    # The user has already prepared an existing SmartEditor tab.
+    notify('이미 열어둔 네이버 글쓰기 화면을 사용합니다. 제목 칸을 클릭해 두세요')
     if not wait_for_focus():return
     for _ in range(50):
         check_control(pause_event,stop_event)
@@ -1087,7 +1088,7 @@ class App:
             return messagebox.showwarning('본문 위치 확인',
                 '저장된 본문 좌표가 도구막대 또는 제목 칸일 수 있습니다. '
                 '네이버 글쓰기 화면의 제목 아래 본문 첫 줄을 다시 지정하세요.')
-        if not messagebox.askyesno('중요','브라우저에서 제목 칸을 클릭한 다음 입력 시작을 누릅니다.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
+        if not messagebox.askyesno('중요','이미 열어둔 네이버 글쓰기 창을 사용하며 새 네이버 창은 열리지 않습니다.\n확인을 누른 뒤 기존 글쓰기 화면의 제목 칸을 클릭하세요.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
         self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
     def begin(self):
