@@ -617,7 +617,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
         else:
             # The first prose block starts at the clicked location outside the
             # quotation; inserting Enter here could return to the quote.
-            if previous not in (None,'image','hero_quote','question','final_quote'):
+            if previous not in (None,'image','hero_quote','question','final_quote','answer_label'):
                 pyautogui.press('enter')
             type_unicode_text(b['value'],pause_event=pause_event,stop_event=stop_event)
             if kind == 'answer_label':
