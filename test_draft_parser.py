@@ -50,6 +50,28 @@ class DraftParsingTests(unittest.TestCase):
             data["blocks"][0]["value"],
             "의정부 순대국 맛집 복실네 평양찹쌀순대")
 
+    def test_input_start_never_opens_another_naver_tab(self):
+        import ast
+        import inspect
+        import textwrap
+        import app
+        tree = ast.parse(textwrap.dedent(inspect.getsource(app.automate_naver)))
+        web_opens = [node for node in ast.walk(tree)
+                     if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Attribute)
+                     and isinstance(node.func.value, ast.Name)
+                     and node.func.value.id == 'webbrowser'
+                     and node.func.attr == 'open']
+        self.assertEqual(web_opens, [], "Input Start/F7 must not open a browser")
+        manual_tree = ast.parse(textwrap.dedent(inspect.getsource(app.App.open_naver)))
+        manual_opens = [node for node in ast.walk(manual_tree)
+                        if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == 'webbrowser'
+                        and node.func.attr == 'open']
+        self.assertEqual(len(manual_opens), 1, "Open Naver button should still open Naver")
+
     def test_bracketed_marker(self):
         data = parse_pasted_draft("제목\n[사진 2]", self.photos)
         self.assertEqual(data["blocks"][0]["type"], "image")
