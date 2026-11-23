@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from app import parse_pasted_draft, PHOTO_MARKER_NATURAL
+from app import parse_pasted_draft, PHOTO_MARKER_NATURAL, safe_naver_typing_text
 
 
 class DraftParsingTests(unittest.TestCase):
@@ -41,6 +41,16 @@ class DraftParsingTests(unittest.TestCase):
     def test_no_duplicate_photos(self):
         with self.assertRaises(ValueError):
             parse_pasted_draft("제목\n📸 사진 1 — 첫 장\n[사진 1]", self.photos)
+
+    def test_sanitize_unrenderable_emoji_without_damaging_korean(self):
+        original = "안녕하세요 시아애비입니다 \ufffd😊"
+        self.assertEqual(safe_naver_typing_text(original).strip(), "안녕하세요 시아애비입니다")
+        self.assertEqual(safe_naver_typing_text("사진📸 1 — 매장 외관"), "사진 1 — 매장 외관")
+
+    def test_answer_label_always_separate(self):
+        data = parse_pasted_draft("제목\nQ. 외관은?\n📸 사진 1 — 외관\nA.\n답변입니다",self.photos)
+        self.assertEqual([b["type"] for b in data["blocks"]],
+                         ["question","image","answer_label","text"])
 
 
 if __name__ == "__main__":
