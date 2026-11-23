@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.13'
+APP_VERSION = 'v18.14'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -172,9 +172,7 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
     if ai_closing and str(ai_closing).strip(): closing=str(ai_closing).strip()
     if phrases: closing+='\n\n'+'\n'.join(phrases)
     closing+='\n\n다음에도 재미있는 이야기로 찾아올게요\n\n지금까지 시아애비였습니다! ❤️'
-    blocks.extend([{'type':'final_quote','value':'Q. 시아애비의 마무리 한마디는요?'},
-                   {'type':'answer_label','value':'A.'},
-                   {'type':'text','value':closing},
+    blocks.extend([{'type':'final_quote','value':closing},
                    {'type':'text','value':' '.join('#'+re.sub(r'\s+','',w) for w in [shop,menu,'맛집후기','시아애비'] if w.strip())}])
     return {'title':make_hook_title(shop,menu,title),'blocks':blocks}
 
@@ -244,7 +242,8 @@ def clean_data(data):
     for b in data['blocks']:
         if 'value' in b:
             v=clean_blog_text(b['value'])
-            if b['type'] in ('question','final_quote'):v='Q. '+re.sub(r'^Q\.?\s*','',v)
+            if b['type']=='question':v='Q. '+re.sub(r'^Q\.?\s*','',v)
+            if b['type']=='final_quote':v=re.sub(r'^Q\.?\s*','',v).strip()
             if b['type']=='answer_label':v='A.'
             if b['type']=='text':
                 v=re.sub(r'\n{2,}','\n',v)
@@ -254,6 +253,7 @@ def clean_data(data):
 
 PHOTO_MARKER=re.compile(r'^\s*(?:📸\s*)?\[사진(?:\s+(\d+)(?:\s*[—–-]\s*[^\]]*)?)?\]\s*(.*?)\s*$',re.I)
 SUBTITLE_MARKER = re.compile(r'^(?:\[부제목\]\s*|부제목\s*[:：]\s*)(.+)$', re.I)
+FINAL_MARKER = re.compile(r'^(?:\[마무리\]|\[총평\]|마무리\s*[:：]|총평\s*[:：])\s*(.*)$',re.I)
 PHOTO_MARKER_NATURAL = re.compile(r'^\s*(?:📸\s*)?사진\s+(\d+)(?:\s*[—–:-]\s*.*)?\s*$', re.I)
 
 def strip_draft_markdown(value):
@@ -267,16 +267,23 @@ def strip_draft_markdown(value):
 
 def parse_pasted_draft(raw,photos,default_subtitle=None):
     files={p.name.casefold():p for p in photos}
-    blocks=[];buf=[];used=set();title=''
+    blocks=[];buf=[];used=set();title='';in_final=False
     def flush():
+        nonlocal in_final
         if buf:
             value='\n'.join(buf).strip()
             buf.clear()
-            if value:blocks.append({'type':'text','value':value})
+            if value:blocks.append({'type':'final_quote' if in_final else 'text','value':value})
+        in_final=False
     for original in raw.replace('\r','').split('\n'):
         line=strip_draft_markdown(original)
         if not line or line=='---':
+            continue
+        fm=FINAL_MARKER.fullmatch(line)
+        if fm:
             flush()
+            in_final=True
+            if fm.group(1).strip():buf.append(fm.group(1).strip())
             continue
         match=PHOTO_MARKER.fullmatch(line)
         natural=PHOTO_MARKER_NATURAL.fullmatch(line) if not match else None
@@ -315,11 +322,14 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
         if not title and not blocks and not buf:title=heading
         elif re.match(r'^Q\.\s*',heading,re.I):
             flush()
-            question_kind = 'final_quote' if re.search(r'총평|마무리|한마디|전체\s*평가',heading) else 'question'
-            blocks.append({'type':question_kind,'value':heading})
+            if re.search(r'총평|마무리|한마디|전체\s*평가',heading):
+                in_final=True
+            else:
+                blocks.append({'type':'question','value':heading})
         elif re.fullmatch(r'A\.',heading,re.I):
-            flush()
-            blocks.append({'type':'answer_label','value':'A.'})
+            if not in_final:
+                flush()
+                blocks.append({'type':'answer_label','value':'A.'})
         else:buf.append(heading if line.startswith('#') else line)
     flush()
     if not any(b['type']=='hero_quote' for b in blocks):
@@ -688,6 +698,9 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             # The editor must expose its normal post-image text caret.
             pyautogui.press('end')
         elif kind in ('hero_quote','question','final_quote'):
+            if kind == 'final_quote':
+                pyautogui.hotkey('ctrl','end')
+                time.sleep(.25)
             if previous not in (None,'image'):
                 pyautogui.press('enter')
             selected_style = (subtitle_quote_style if kind == 'hero_quote' else
@@ -705,7 +718,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
                 click_below_intro_quote(body_point,quote_exit_offset,notify)
             elif kind == 'final_quote':
                 check_control(pause_event,stop_event)
-                exit_final_quote(notify)
+                if next_kind is not None: exit_final_quote(notify)
             elif kind == 'question' and next_kind != 'image':
                 check_control(pause_event,stop_event)
                 pyautogui.press('end')
@@ -967,6 +980,8 @@ class App:
                         for b in data['blocks']:
                             if b['type']=='hero_quote':
                                 rendered='[부제목] '+b['value']
+                            elif b['type']=='final_quote':
+                                rendered='[마무리]\n'+b['value']
                             elif b['type']=='image':
                                 rendered='[사진] '+Path(b['path']).name
                             else:
