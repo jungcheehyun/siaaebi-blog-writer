@@ -963,7 +963,7 @@ class App:
         self.menu=tk.StringVar(value='')
         self.api=tk.StringVar(value=os.getenv('OPENAI_API_KEY',''))
         self.use_ai=tk.BooleanVar(value=False)
-        self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
+        self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.resume_start_block=0;self.resume_title_done=False;self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
         main=ttk.Frame(root,padding=15);main.pack(fill='both',expand=True)
         ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',21,'bold')).pack(anchor='w',pady=(0,3))
         ttk.Label(main,text='원고 작성부터 사진 첨부까지  ·  '+APP_VERSION,
@@ -1178,7 +1178,7 @@ class App:
                             if b['type']=='hero_quote':
                                 rendered='[부제목] '+b['value']
                             elif b['type']=='final_quote':
-                                rendered='[마무리]\n'+b['value']
+                                rendered='[마무리]'
                             elif b['type']=='image':
                                 rendered='[사진] '+Path(b['path']).name
                             else:
@@ -1200,7 +1200,13 @@ class App:
     def apply_pasted_draft(self):
         try:
             self.data=self.current_draft()
-            self.setstatus('원고 적용 완료 · 이제 [입력 시작 (F7)]만 누르면 됩니다 (네이버 입력 시작 단계 불필요)')
+            checkpoint=read_resume_checkpoint(self.data)
+            self.go.config(text='이전 중단 구간 이어쓰기 (F7)' if checkpoint else '원고 적용 후 바로 입력 시작 (F7)')
+            if checkpoint:
+                self.setstatus('원고 적용 완료 · 이전 작업 ' + resume_block_label(self.data,checkpoint['next_block'])
+                               + ' 부터 이어쓰기 가능 (F7)')
+            else:
+                self.setstatus('원고 적용 완료 · 이제 [입력 시작 (F7)]만 누르면 됩니다 (네이버 입력 시작 단계 불필요)')
         except Exception as e:
             messagebox.showerror('원고 확인',str(e))
     def preview(self):
@@ -1225,8 +1231,77 @@ class App:
             return messagebox.showwarning('본문 위치 확인',
                 '저장된 본문 좌표가 도구막대 또는 제목 칸일 수 있습니다. '
                 '네이버 글쓰기 화면의 제목 아래 본문 첫 줄을 다시 지정하세요.')
-        if not messagebox.askyesno('중요','이미 열어둔 네이버 글쓰기 창을 사용하며 새 네이버 창은 열리지 않습니다.\n확인을 누른 뒤 기존 글쓰기 화면의 제목 칸을 클릭하세요.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
-        self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
+
+        checkpoint = read_resume_checkpoint(self.data)
+        start_block = 0
+        title_done = False
+        if checkpoint:
+            index = checkpoint['next_block']
+            label = resume_block_label(self.data, index)
+            answer = messagebox.askyesnocancel(
+                '이전 작업 발견',
+                f'이전에 {label} 구간에서 입력이 중단됐습니다.\n'
+                f'완료 기록: {index}/{len(self.data["blocks"])}개 원고 블록\n\n'
+                '예: 기존 네이버 글에서 이어쓰기\n'
+                '아니요: 새 글을 처음부터 입력\n'
+                '취소: 아무것도 하지 않기\n\n'
+                '※ 원고와 사진 폴더가 같을 때만 이어쓰기할 수 있습니다.')
+            if answer is None:return
+            if answer:
+                start_block=index
+                title_done=checkpoint['title_done']
+                if title_done and start_block >= len(self.data['blocks']):
+                    return messagebox.showinfo('이미 입력 완료',
+                        '마지막 블록까지 완료 기록이 있습니다. 네이버 글을 확인하거나 처음부터 새 글로 시작해 주세요.')
+                if checkpoint['phase'] in ('running','failed'):
+                    if title_done:
+                        choice = messagebox.askyesnocancel(
+                            '실패 구간 정리 후 재개',
+                            f'실패한 부분: {label}\n\n'
+                            '예: 이 블록을 다시 입력\n'
+                            '    (기존에 부분 입력된 글이나 사진이 있다면 먼저 삭제)\n'
+                            '아니요: 이 블록이 이미 완성된 것을 확인했으므로 건너뛰기\n'
+                            '취소: 중단\n\n'
+                            '사진이 실제로 첨부됐는지 먼저 확인해 중복을 방지하세요.')
+                        if choice is None:return
+                        if not choice:
+                            start_block += 1
+                    elif not messagebox.askyesno(
+                            '제목 부분 입력 확인',
+                            '제목 작성 중 중단됐습니다.\n'
+                            '네이버 제목 칸의 부분 입력 내용을 지운 뒤\n'
+                            '제목 칸을 클릭할 수 있나요?\n\n'
+                            '준비됐다면 예를 누르세요.'):
+                        return
+            else:
+                if not messagebox.askyesno('새 글 시작 확인',
+                        '처음부터 입력하려면 기존 네이버 글쓰기 내용이 비어 있어야 합니다.\n'
+                        '기존 글을 지우거나 새 글쓰기 화면을 열었나요?'):
+                    return
+                clear_resume_checkpoint(self.data)
+
+        if not messagebox.askyesno(
+                '입력 시작 확인',
+                ('기존 글에서 이어서 입력합니다. 제목은 다시 쓰지 않습니다.\n'
+                 f'시작 구간: {resume_block_label(self.data,start_block)}\n'
+                 '이전까지 완료된 내용 뒤에 커서를 정확히 두세요.\n'
+                 '사진 선택 창과 이미지 뷰어를 모두 닫아야 합니다.\n\n'
+                 if title_done else
+                 '새 글 입력입니다. 기존에 열어 둔 네이버 글쓰기 화면의 제목 칸을 클릭하세요.\n'
+                 '네이버 새 창은 열지 않습니다.\n\n')
+                + '확인을 누른 뒤 5초 안에 네이버 입력 위치를 클릭하세요.\n'
+                  '입력 중 마우스/키보드를 사용하지 마세요.\n'
+                  '임시저장은 직접 눌러야 합니다. 계속할까요?'):
+            return
+
+        self.resume_start_block=start_block
+        self.resume_title_done=title_done
+        write_resume_checkpoint(self.data,start_block,title_done,'ready')
+        self.event.clear();self.pause_event.set();self.stop_event.clear()
+        self.running=True;self.cancel=False
+        self.go.config(state='normal')
+        self.pause_button.config(state='normal',text='일시정지')
+        self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
     def begin(self):
         if not self.running:
