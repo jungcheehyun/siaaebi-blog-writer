@@ -1080,6 +1080,11 @@ class App:
         self.go=ttk.Button(buttons,text='원고 적용 후 바로 입력 시작 (F7)',style='Accent.TButton',command=self.begin);self.go.pack(side='left',padx=3)
         self.pause_button=ttk.Button(buttons,text='일시정지',command=self.toggle_pause,state='disabled');self.pause_button.pack(side='left',padx=3)
         self.stop_button=ttk.Button(buttons,text='중지 (F9)',command=self.stop_input,state='disabled');self.stop_button.pack(side='left',padx=3)
+        prompt_row=ttk.Frame(main);prompt_row.pack(fill='x',pady=(0,8))
+        ttk.Button(prompt_row,text='ChatGPT 원고 작성 명령어 복사',
+                   command=self.copy_chatgpt_prompt).pack(side='left',padx=3)
+        ttk.Label(prompt_row,text='사진은 ChatGPT에 직접 첨부 · 내 블로그 말투는 자유롭게',
+                  foreground='#64748B').pack(side='left',padx=10)
         saved_positions = load_editor_positions()
         for field in POSITION_FIELDS:
             setattr(self, field, saved_positions.get(field))
@@ -1288,6 +1293,29 @@ class App:
             self.data=self.current_draft()
             webbrowser.open(save_preview(self.data).as_uri())
         except Exception as e:messagebox.showerror('미리보기 실패',str(e))
+    def copy_chatgpt_prompt(self):
+        """Copy only the drafting instructions and user-entered non-secret fields."""
+        try:
+            try:
+                count=len(sorted_photos(self.folder.get()))
+            except OSError:
+                count=None
+            prompt=build_chatgpt_draft_prompt(
+                shop=self.shop.get(),
+                menu=self.menu.get(),
+                keywords=self.keywords.get('1.0','end').strip(),
+                photo_count=count)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(prompt)
+            self.root.update_idletasks()
+            self.setstatus('ChatGPT 원고 작성 명령어 복사 완료 · ChatGPT에 붙여넣고 사진을 직접 첨부하세요')
+            messagebox.showinfo('명령어 복사 완료',
+                'ChatGPT 전용 원고 작성 명령어를 복사했습니다.\n\n'
+                'ChatGPT에 붙여넣고 사진과 방문 내용을 함께 보내 주세요.\n'
+                '내 블로그 글을 첨부하면 각자의 말투로 작성할 수 있습니다.')
+        except Exception as e:
+            messagebox.showerror('명령어 복사 실패',str(e))
+
     def open_naver(self):
         webbrowser.open('https://blog.naver.com/')
         self.setstatus('네이버 글쓰기 화면을 열고 제목 칸을 클릭하세요. 이후 [입력 시작 (F7)]을 누르면 됩니다')
