@@ -683,22 +683,24 @@ def upload_via_naver_button(path, photo_button, notify):
     if not opened:
         raise RuntimeError('사진 파일 이름 입력칸에 경로를 확인할 수 없습니다. '
                            '잘못된 파일이 열리지 않도록 자동 첨부를 중단했습니다: ' + path.name)
-    if opened:
-        notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
-        # Clicking the actual Open button commits the combo box value.
-        try:
-            open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
-            if open_button and win32gui.IsWindowVisible(open_button):
-                left, top, right, bottom = win32gui.GetWindowRect(open_button)
-                pyautogui.click((left + right) // 2, (top + bottom) // 2)
-            else:
-                pyautogui.press('enter')
-        except Exception:
-            pyautogui.press('enter')
-        for _ in range(28):
-            if dialog_closed():
-                break
-            time.sleep(.25)
+    notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
+    # Only click a verified IDOK button owned by the SAME active picker.
+    # Blind Enter can open the highlighted photo in a viewer.
+    if dialog_closed() or win32gui.GetForegroundWindow() != dialog:
+        raise RuntimeError('열기 실행 직전 사진 선택 창의 포커스가 바뀌었습니다: ' + path.name)
+    open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
+    if not open_button or not win32gui.IsWindowVisible(open_button):
+        raise RuntimeError('사진 선택 창의 열기 버튼을 찾지 못했습니다: ' + path.name)
+    left, top, right, bottom = win32gui.GetWindowRect(open_button)
+    dlg_left, dlg_top, dlg_right, dlg_bottom = win32gui.GetWindowRect(dialog)
+    if not (dlg_left <= left < right <= dlg_right
+            and dlg_top <= top < bottom <= dlg_bottom):
+        raise RuntimeError('사진 선택 창의 열기 버튼 좌표가 비정상입니다: ' + path.name)
+    pyautogui.click((left + right) // 2, (top + bottom) // 2)
+    for _ in range(28):
+        if dialog_closed():
+            break
+        time.sleep(.25)
 
     # Never retry blind Alt+N/Enter here: Enter can open a highlighted file
     # or a viewer when filename focus is not guaranteed.
