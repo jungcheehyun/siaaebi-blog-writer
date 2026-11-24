@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.17'
+APP_VERSION = 'v18.18'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -194,7 +194,8 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
     if ai_closing and str(ai_closing).strip(): closing=str(ai_closing).strip()
     if phrases: closing+='\n\n'+'\n'.join(phrases)
     closing+='\n\n다음에도 재미있는 이야기로 찾아올게요\n\n지금까지 시아애비였습니다! ❤️'
-    blocks.extend([{'type':'final_quote','value':closing},
+    blocks.extend([{'type':'final_quote','value':'마무리한마디'},
+                   {'type':'text','value':closing},
                    {'type':'text','value':' '.join('#'+re.sub(r'\s+','',w) for w in [shop,menu,'맛집후기','시아애비'] if w.strip())}])
     return {'title':make_hook_title(shop,menu,title),'blocks':blocks}
 
@@ -295,7 +296,12 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
         if buf:
             value='\n'.join(buf).strip()
             buf.clear()
-            if value:blocks.append({'type':'final_quote' if in_final else 'text','value':value})
+            if value:
+                if in_final:
+                    blocks.append({'type':'final_quote','value':'마무리한마디'})
+                    blocks.append({'type':'text','value':value})
+                else:
+                    blocks.append({'type':'text','value':value})
         in_final=False
     for original in raw.replace('\r','').split('\n'):
         line=strip_draft_markdown(original)
@@ -447,8 +453,10 @@ def save_preview(data):
         typ=block['type']
         if typ=='hero_quote':
             pieces.append('<div class="heroquote"><span>❝</span><em>'+html.escape(block['value'])+'</em><span>❞</span></div>')
-        elif typ in ('question','final_quote'):
+        elif typ=='question':
             pieces.append('<blockquote class="question"><span class="quote-mark">❝</span><span class="quote-text">'+html.escape(block['value'])+'</span><span class="quote-underline"></span></blockquote>')
+        elif typ=='final_quote':
+            pieces.append('<blockquote class="final-frame">'+html.escape(block['value'])+'</blockquote>')
         elif typ=='answer_label':
             pieces.append('<p class="answer-label">A.</p>')
         elif typ=='text':
@@ -481,6 +489,8 @@ def save_preview(data):
        height:auto;object-fit:contain;margin:0 auto}
     figcaption{color:#888;font-size:12px;text-align:center;margin-top:6px}
     .answer-label{margin:18px 0 12px!important;text-align:left}
+    .final-frame{margin:30px 0 15px;border:2px solid #999;padding:14px 18px;
+       font-size:17px;font-weight:600;display:block;text-align:left}
     @media(max-width:420px){body{max-width:100%;margin:0 auto;padding:14px}}
     """
     doc='<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+html.escape(data['title'])+'</title><style>'+style+'</style><h1>'+html.escape(data['title'])+'</h1>'+''.join(pieces)+'</html>'
@@ -595,16 +605,17 @@ def upload_via_naver_button(path, photo_button, notify):
     path=Path(path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f'사진 파일이 존재하지 않습니다: {path}\n원고 생성 후 사진 폴더를 옮겼다면 원고를 다시 생성하세요.')
-    if not _wait_for_native_file_dialog(timeout=.3):
-        # Naver SmartEditor toolbar: click the green '사진' icon itself,
-        # not the media menu or the editor body.
-        x, y = photo_button
-        width, height = pyautogui.size()
-        if not (0 <= x < width and 0 <= y < height):
-            raise RuntimeError(f'저장된 사진 버튼 좌표 {(x, y)}가 현재 화면 범위를 벗어났습니다. 위치를 다시 지정하세요.')
-        notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
-        pyautogui.moveTo(x, y, duration=.3)
-        pyautogui.click(x=x, y=y)
+    if _wait_for_native_file_dialog(timeout=.3):
+        raise RuntimeError('이전 사진 선택 창이 아직 열려 있습니다. 창을 닫고 다시 입력을 시작하세요: ' + path.name)
+    # Naver SmartEditor toolbar: click the green '사진' icon itself,
+    # not the media menu or the editor body.
+    x, y = photo_button
+    width, height = pyautogui.size()
+    if not (0 <= x < width and 0 <= y < height):
+        raise RuntimeError(f'저장된 사진 버튼 좌표 {(x, y)}가 현재 화면 범위를 벗어났습니다. 위치를 다시 지정하세요.')
+    notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
+    pyautogui.moveTo(x, y, duration=.3)
+    pyautogui.click(x=x, y=y)
     if not _wait_for_native_file_dialog(timeout=8.0):
         raise RuntimeError(
             '상단 [사진] 버튼 클릭 후 Windows 파일 선택 창을 확인하지 못했습니다.\n'
@@ -669,58 +680,50 @@ def upload_via_naver_button(path, photo_button, notify):
     except Exception as e:
         notify('Windows 기본 파일명 입력 확인 실패, 대체 방식으로 전환: ' + str(e))
         opened = False
-    if opened:
-        notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
-        # Clicking the actual Open button commits the combo box value.
-        try:
-            open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
-            if open_button and win32gui.IsWindowVisible(open_button):
-                left, top, right, bottom = win32gui.GetWindowRect(open_button)
-                pyautogui.click((left + right) // 2, (top + bottom) // 2)
-            else:
-                pyautogui.press('enter')
-        except Exception:
-            pyautogui.press('enter')
-        for _ in range(28):
-            if dialog_closed():
-                break
-            time.sleep(.25)
-
-    if not dialog_closed():
-        # Fallback 1: use the localized File name shortcut.
-        notify('사진 선택 창이 열려 있어 Alt+N 방식으로 다시 시도합니다')
-        pyautogui.hotkey('alt', 'n')
-        time.sleep(.3)
-        pyperclip.copy(str(path))
-        pyautogui.hotkey('ctrl', 'a')
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(.35)
-        pyautogui.press('enter')
-        for _ in range(20):
-            if dialog_closed():
-                break
-            time.sleep(.25)
-
-    if not dialog_closed():
-        # Fallback 2: Windows Open dialog accepts a full path in the address bar.
-        notify('파일 이름 입력이 실패하여 경로 표시줄로 재시도합니다')
-        pyautogui.hotkey('ctrl', 'l')
+    if not opened:
+        raise RuntimeError('사진 파일 이름 입력칸에 경로를 확인할 수 없습니다. '
+                           '잘못된 파일이 열리지 않도록 자동 첨부를 중단했습니다: ' + path.name)
+    notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
+    # Only click a verified IDOK button owned by the SAME active picker.
+    # Blind Enter can open the highlighted photo in a viewer.
+    if dialog_closed() or win32gui.GetForegroundWindow() != dialog:
+        raise RuntimeError('열기 실행 직전 사진 선택 창의 포커스가 바뀌었습니다: ' + path.name)
+    open_button = win32gui.GetDlgItem(dialog, 1)  # IDOK
+    if not open_button or not win32gui.IsWindowVisible(open_button):
+        raise RuntimeError('사진 선택 창의 열기 버튼을 찾지 못했습니다: ' + path.name)
+    left, top, right, bottom = win32gui.GetWindowRect(open_button)
+    dlg_left, dlg_top, dlg_right, dlg_bottom = win32gui.GetWindowRect(dialog)
+    if not (dlg_left <= left < right <= dlg_right
+            and dlg_top <= top < bottom <= dlg_bottom):
+        raise RuntimeError('사진 선택 창의 열기 버튼 좌표가 비정상입니다: ' + path.name)
+    pyautogui.click((left + right) // 2, (top + bottom) // 2)
+    for _ in range(28):
+        if dialog_closed():
+            break
         time.sleep(.25)
-        pyperclip.copy(str(path))
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(.3)
-        pyautogui.press('enter')
-        for _ in range(24):
-            if dialog_closed():
-                break
-            time.sleep(.25)
 
+    # Never retry blind Alt+N/Enter here: Enter can open a highlighted file
+    # or a viewer when filename focus is not guaranteed.
+    # Do NOT use Ctrl+L with a full image path either.
     if not dialog_closed():
-        raise RuntimeError('사진 선택 창에 파일 경로를 입력했지만 창이 닫히지 않았습니다. '
-                           '사진 파일을 수동으로 선택할 수 있다면 Windows 파일명 입력 컨트롤 차이일 수 있습니다: '
-                           + path.name)
-    time.sleep(3.0 if path.suffix.lower() != '.gif' else 4.5)
-    notify('사진 선택 완료: ' + path.name + ' — 네이버 본문에서 이미지 업로드를 확인하세요')
+        raise RuntimeError(
+            '사진 파일 선택 창이 그대로 열려 있어 자동입력을 중단했습니다: '
+            + path.name + '. 파일 이름 칸에 정확한 경로가 들어갔는지 확인하세요.')
+    # File dialog closing does NOT guarantee that Naver has received the image.
+    # If a photo viewer or Explorer has focus, stop before typing A. into it.
+    time.sleep(.65)
+    active_hwnd = win32gui.GetForegroundWindow()
+    active_class = win32gui.GetClassName(active_hwnd) if active_hwnd else ''
+    active_title = win32gui.GetWindowText(active_hwnd) if active_hwnd else ''
+    if active_class not in ('Chrome_WidgetWin_1', 'MozillaWindowClass'):
+        raise RuntimeError(
+            '사진 선택 후 네이버 브라우저가 활성화되지 않았습니다. '
+            '사진이 뷰어로 열렸거나 다른 창에 포커스가 있을 수 있습니다. '
+            '자동입력을 중단했습니다: ' + path.name + ' / 활성 창: ' + active_title[:70])
+    notify('사진 선택 창 닫힘 · 네이버 화면 복귀 확인: ' + path.name)
+    # Allow slower OneDrive/synced images to finish loading before A. is entered.
+    time.sleep(6.0 if path.suffix.lower() != '.gif' else 7.5)
+    notify('사진 처리 대기 완료: ' + path.name + ' (실제 게시글 이미지 표시 여부는 화면에서 확인)')
 
 
 def apply_quote(quote_button, quote_style, notify):
@@ -745,8 +748,8 @@ def exit_final_quote(notify):
     import pyautogui
     pyautogui.press('end')
     pyautogui.press('enter', presses=2, interval=.2)
-    time.sleep(.35)
-    notify('마지막 총평 인용구 종료: Enter 두 번 후 A. 입력')
+    time.sleep(.45)
+    notify('마무리한마디 프레임 종료: 다음 줄부터 일반 본문 입력')
 
 
 def click_below_intro_quote(body_point, offset_px, notify):
@@ -804,6 +807,9 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
         kind=b['type']
         next_kind=blocks[i+1]['type'] if i+1<len(blocks) else None
         if kind=='image':
+            notify('사진 ' + str(sum(1 for prev in blocks[:i+1] if prev['type']=='image'))
+                   + '/' + str(sum(1 for item in blocks if item['type']=='image'))
+                   + ' 첨부 시도: ' + Path(b['path']).name)
             upload_via_naver_button(b['path'],photo_button,notify)
             check_control(pause_event,stop_event)
             # The user specifically wants A. immediately after the photo.

@@ -200,7 +200,8 @@ class DraftParsingTests(unittest.TestCase):
         data=parse_pasted_draft(draft,self.photos)
         self.assertEqual([b["type"] for b in data["blocks"]],
                          ["hero_quote","question","image","answer_label","text",
-                          "final_quote","text"])
+                          "final_quote","text","text"])
+        self.assertEqual(data["blocks"][-3]["value"], "마무리한마디")
         self.assertNotIn("Q.",data["blocks"][-2]["value"])
         self.assertNotIn("A.",data["blocks"][-2]["value"])
         self.assertIn("가족외식",data["blocks"][-2]["value"])
@@ -213,8 +214,9 @@ class DraftParsingTests(unittest.TestCase):
              "오늘도 맛있는 하루 보내세요\n시아애비였습니다\n"
              "#의정부양촌리")
         data=parse_pasted_draft(raw,self.photos)
-        self.assertEqual([b["type"] for b in data["blocks"]][-2:],
-                         ["final_quote","text"])
+        self.assertEqual([b["type"] for b in data["blocks"]][-3:],
+                         ["final_quote","text","text"])
+        self.assertEqual(data["blocks"][-3]["value"], "마무리한마디")
         self.assertEqual(data["blocks"][-2]["value"],
                          "가족외식 장소로 좋았어요\n오늘도 맛있는 하루 보내세요\n시아애비였습니다")
 
@@ -223,9 +225,30 @@ class DraftParsingTests(unittest.TestCase):
         data=compose("의정부 양촌리","돼지갈비","",self.photos[:1],
                      sections=[{"q":"외관은?","a":"큰 건물이에요"}])
         kinds=[b["type"] for b in data["blocks"]]
-        self.assertEqual(kinds[-2:],["final_quote","text"])
-        self.assertNotIn("Q.",data["blocks"][-2]["value"])
+        self.assertEqual(kinds[-3:],["final_quote","text","text"])
+        self.assertEqual(data["blocks"][-3]["value"], "마무리한마디")
         self.assertIn("시아애비",data["blocks"][-2]["value"])
+
+    def test_final_frame_preview_does_not_wrap_closing_prose(self):
+        from app import save_preview
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            with patch('app.OUTPUT', Path(folder)):
+                data = parse_pasted_draft(
+                    "후킹 제목\n[부제목] 복실네 순대국 맛집\n"
+                    "[마무리]\n정말 맛있었어요\n또 갈게요\n"
+                    "#맛집 #시아애비", self.photos)
+                preview = save_preview(data).read_text(encoding='utf-8')
+        self.assertIn('class="final-frame">마무리한마디</blockquote>', preview)
+        self.assertIn('<p>정말 맛있었어요</p>', preview)
+        self.assertNotIn('class="final-frame">정말 맛있었어요', preview)
+
+    def test_image_upload_never_navigates_to_image_path_in_address_bar(self):
+        import inspect, app
+        body = inspect.getsource(app.upload_via_naver_button)
+        self.assertNotIn("hotkey('ctrl', 'l')", body)
+        self.assertIn("사진 선택 후 네이버 브라우저가 활성화되지 않았습니다", body)
 
     def test_normal_question_keeps_question_quote_style(self):
         data=parse_pasted_draft("제목\nQ. 메뉴는 어떤가요?\nA.\n좋아요",self.photos)
