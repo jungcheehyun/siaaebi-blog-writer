@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.17'
+APP_VERSION = 'v18.18'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -194,7 +194,8 @@ def compose(shop, menu, notes, photos, sections=None, title=None, target_chars=1
     if ai_closing and str(ai_closing).strip(): closing=str(ai_closing).strip()
     if phrases: closing+='\n\n'+'\n'.join(phrases)
     closing+='\n\n다음에도 재미있는 이야기로 찾아올게요\n\n지금까지 시아애비였습니다! ❤️'
-    blocks.extend([{'type':'final_quote','value':closing},
+    blocks.extend([{'type':'final_quote','value':'마무리한마디'},
+                   {'type':'text','value':closing},
                    {'type':'text','value':' '.join('#'+re.sub(r'\s+','',w) for w in [shop,menu,'맛집후기','시아애비'] if w.strip())}])
     return {'title':make_hook_title(shop,menu,title),'blocks':blocks}
 
@@ -295,7 +296,12 @@ def parse_pasted_draft(raw,photos,default_subtitle=None):
         if buf:
             value='\n'.join(buf).strip()
             buf.clear()
-            if value:blocks.append({'type':'final_quote' if in_final else 'text','value':value})
+            if value:
+                if in_final:
+                    blocks.append({'type':'final_quote','value':'마무리한마디'})
+                    blocks.append({'type':'text','value':value})
+                else:
+                    blocks.append({'type':'text','value':value})
         in_final=False
     for original in raw.replace('\r','').split('\n'):
         line=strip_draft_markdown(original)
@@ -447,8 +453,10 @@ def save_preview(data):
         typ=block['type']
         if typ=='hero_quote':
             pieces.append('<div class="heroquote"><span>❝</span><em>'+html.escape(block['value'])+'</em><span>❞</span></div>')
-        elif typ in ('question','final_quote'):
+        elif typ=='question':
             pieces.append('<blockquote class="question"><span class="quote-mark">❝</span><span class="quote-text">'+html.escape(block['value'])+'</span><span class="quote-underline"></span></blockquote>')
+        elif typ=='final_quote':
+            pieces.append('<blockquote class="final-frame">'+html.escape(block['value'])+'</blockquote>')
         elif typ=='answer_label':
             pieces.append('<p class="answer-label">A.</p>')
         elif typ=='text':
@@ -481,6 +489,8 @@ def save_preview(data):
        height:auto;object-fit:contain;margin:0 auto}
     figcaption{color:#888;font-size:12px;text-align:center;margin-top:6px}
     .answer-label{margin:18px 0 12px!important;text-align:left}
+    .final-frame{margin:30px 0 15px;border:2px solid #999;padding:14px 18px;
+       font-size:17px;font-weight:600;display:block;text-align:left}
     @media(max-width:420px){body{max-width:100%;margin:0 auto;padding:14px}}
     """
     doc='<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+html.escape(data['title'])+'</title><style>'+style+'</style><h1>'+html.escape(data['title'])+'</h1>'+''.join(pieces)+'</html>'
