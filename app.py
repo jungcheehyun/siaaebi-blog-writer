@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.19'
+APP_VERSION = 'v18.20'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -150,6 +150,80 @@ def resume_block_label(data, index):
         'final_quote': '마무리 프레임',
         'text': '본문 문단',
     }.get(block['type'], '원고 블록')
+
+
+def build_chatgpt_draft_prompt(shop="", menu="", keywords="", photo_count=None):
+    """A reusable ChatGPT instruction matching the local pasted-draft parser."""
+    def supplied(value):
+        cleaned=str(value or '').strip()
+        return cleaned if cleaned else '(사용자가 직접 입력)'
+
+    count = (f'{photo_count}장 — 사진 1부터 사진 {photo_count}까지 모두 작성'
+             if type(photo_count) is int and photo_count > 0
+             else 'ChatGPT에 첨부한 사진 장수에 맞춰 작성')
+    return f"""당신은 네이버 블로그 후기 원고 작성자입니다
+아래에 첨부하는 사진과 실제 방문 정보를 바탕으로 원고를 작성해 주세요
+이 원고는 '시아애비 블로그 자동작성기'에 붙여넣을 예정이므로 아래 서식을 반드시 지켜야 합니다
+
+[원고 출력 형식 — 가장 중요]
+1. 첫 줄: 클릭하고 싶어지는 메인 제목 한 줄만 쓰고 상호명은 넣지 마세요
+   제목 앞에 [제목], 제목:, # 기호를 쓰지 마세요
+2. 둘째 줄: [부제목] 지역명 상호명 검색키워드 대표메뉴
+   반드시 '[부제목] '으로 시작하는 한 줄이며 상호명을 포함하세요
+3. 이후 인사와 간단한 도입문을 쓰세요
+4. 사진마다 아래 네 줄 구조를 그대로 반복하세요
+Q. 사진 내용과 관련된 자연스러운 질문?
+[사진 1]
+A.
+사진에 대한 답변 첫 줄
+이어지는 답변 본문
+
+   Q.와 질문은 반드시 같은 줄에 있어야 하며 질문 전체에 라인&따옴표 인용구가 적용됩니다
+   A.는 반드시 독립된 한 줄로 작성하고 답변은 그 다음 줄부터 시작하세요
+   '[사진 1]', '[사진 2]'처럼 대괄호와 번호만 쓰세요
+   사진 자리에는 설명·파일 이름·이모지를 붙이지 마세요
+   사진 순서와 번호를 1부터 끝까지 빠짐없이, 중복 없이 정확히 맞추세요
+   질문에 '방문사진 1'처럼 기계적인 표현을 쓰지 마세요
+5. 사진 Q&A가 끝나면 아래 마무리 구조를 그대로 사용하세요
+[마무리]
+전체 방문 총평과 재방문 소감
+자연스러운 마무리 인사
+
+#지역맛집 #상호명 #대표메뉴
+
+   '[마무리]'는 반드시 단독 줄로 써야 합니다
+   프로그램이 프레임 인용구에 '마무리한마디'를 자동 입력하므로
+   원고에는 '마무리한마디'라는 문장을 따로 추가하지 마세요
+   총평을 Q. 형식으로 작성하지 마세요
+   총평과 해시태그는 프레임 밖의 일반 글로 처리됩니다
+
+[글쓰기 스타일]
+- 내용은 약 1,500자 내외를 기준으로 사진 수에 맞춰 자연스럽게 조절하세요
+- 모바일 화면을 위해 한 줄 약 15~25자, 한두 줄마다 빈 줄을 넣으세요
+- 왼쪽 정렬에 맞는 자연스러운 문단, 사진은 가운데 배치될 예정입니다
+- 일반 문장 끝에는 마침표를 가급적 쓰지 마세요
+- 가격은 만천원, 만사천원 등 한글 표현을 사용하세요
+- 첨부 사진과 방문 메모로 확인되지 않은 사실이나 감상은 꾸며내지 마세요
+- 작성자의 기존 블로그 글을 제공하면 그 사람의 말투와 인사를 따라 쓰세요
+  예전 글이 없으면 사용자가 원하는 말투를 물어보거나 자연스러운 말투로 작성하세요
+- 특정 블로거의 이름이나 '시아애비'라는 서명을 강제로 넣지 마세요
+
+[최종 출력]
+완성 원고만 출력해 주세요
+원고 앞뒤의 설명, 제목 안내문, 표, 코드블록, 가로 구분선을 쓰지 마세요
+실제 사진을 다시 생성하거나 붙이지 말고 [사진 N] 표기만 쓰세요
+마지막에 사진 개수와 번호·부제목·Q/A·마무리 서식을 스스로 점검하세요
+
+[작성 정보]
+상호명: {supplied(shop)}
+대표메뉴: {supplied(menu)}
+검색 키워드: {supplied(keywords)}
+사진 수: {count}
+지역과 방문 경험: (사용자가 사진과 함께 설명)
+블로그 말투: (사용자가 본인의 블로그 글이나 원하는 말투를 전달)
+
+내가 사진을 올리면 사진 순서 그대로 이 형식의 원고를 작성해 주세요
+"""
 
 
 STYLE_SAMPLE_PATH = CONFIG_DIR / 'style_sample.txt'
