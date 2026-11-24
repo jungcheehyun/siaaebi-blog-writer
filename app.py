@@ -1349,12 +1349,50 @@ class App:
 
     def worker(self):
         def wait():return self.event.wait(300)
-        try:automate_naver(self.data,self.setstatus,wait,self.photo_button,self.body_point,self.quote_button,self.subtitle_quote_style,self.question_quote_style,self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,self.stop_event)
-        except InputCancelled as e:self.setstatus(str(e))
-        except Exception as e:self.setstatus('자동 입력 실패: '+str(e)+' / 미리보기에서 수동 복사해 주세요.')
+        finished=False
+        def save_progress(stage,index):
+            if stage=='title_start':
+                write_resume_checkpoint(self.data,0,False,'running')
+            elif stage=='title_done':
+                write_resume_checkpoint(self.data,0,True,'ready')
+            elif stage=='block_start':
+                write_resume_checkpoint(self.data,index,True,'running')
+            elif stage=='block_done':
+                write_resume_checkpoint(self.data,index+1,True,'ready')
+            else:
+                raise ValueError('알 수 없는 입력 진행 단계: '+str(stage))
+        try:
+            automate_naver(
+                self.data,self.setstatus,wait,self.photo_button,self.body_point,
+                self.quote_button,self.subtitle_quote_style,self.question_quote_style,
+                self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,
+                self.stop_event,start_block=self.resume_start_block,
+                title_done=self.resume_title_done,progress=save_progress)
+            clear_resume_checkpoint(self.data)
+            finished=True
+        except InputCancelled as e:
+            self.setstatus(str(e)+' · F7로 중단 위치부터 이어쓰기할 수 있습니다')
+        except Exception as e:
+            self.setstatus('자동 입력 실패: '+str(e)
+                           +' · 네이버 화면의 부분 입력을 확인한 뒤 F7로 실패 구간부터 이어쓰세요')
         finally:
+            if not finished:
+                checkpoint=read_resume_checkpoint(self.data)
+                if checkpoint:
+                    try:
+                        write_resume_checkpoint(
+                            self.data,checkpoint['next_block'],
+                            checkpoint['title_done'],'failed')
+                    except OSError:
+                        self.setstatus('진행 위치 파일 저장 실패 — 자동 이어쓰기 기록을 확인할 수 없습니다')
             self.running=False;self.pause_event.set()
-            self.root.after(0,lambda:(self.go.config(state='normal'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
+            def restore_buttons():
+                checkpoint=read_resume_checkpoint(self.data)
+                label='이전 중단 구간 이어쓰기 (F7)' if checkpoint else '원고 적용 후 바로 입력 시작 (F7)'
+                self.go.config(state='normal',text=label)
+                self.pause_button.config(state='disabled',text='일시정지')
+                self.stop_button.config(state='disabled')
+            self.root.after(0,restore_buttons)
 
 if __name__=='__main__':
     root=tk.Tk();apply_app_icon(root);App(root);root.mainloop()
