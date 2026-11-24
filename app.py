@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.18'
+APP_VERSION = 'v18.19'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -83,6 +83,74 @@ CONFIG_DIR = Path(os.getenv('LOCALAPPDATA') or (Path.home() / 'AppData' / 'Local
 CONFIG_PATH = CONFIG_DIR / 'editor_positions.json'
 POSITION_FIELDS = ('photo_button', 'body_point', 'quote_button',
                    'subtitle_quote_style', 'question_quote_style', 'final_quote_style')
+
+RESUME_PATH = CONFIG_DIR / 'resume_checkpoint.json'
+
+
+def draft_fingerprint(data):
+    """Checkpoints only apply to the exact text, ordering and image paths."""
+    raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def read_resume_checkpoint(data):
+    try:
+        saved = json.loads(RESUME_PATH.read_text(encoding='utf-8'))
+        if saved.get('fingerprint') != draft_fingerprint(data):
+            return None
+        index = saved.get('next_block')
+        if type(index) is not int or not 0 <= index <= len(data['blocks']):
+            return None
+        if type(saved.get('title_done')) is not bool:
+            return None
+        if saved.get('phase') not in ('ready', 'running', 'failed'):
+            return None
+        return saved
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def write_resume_checkpoint(data, next_block, title_done, phase):
+    if not 0 <= next_block <= len(data['blocks']):
+        raise ValueError('이어쓰기 구간이 원고 범위를 벗어났습니다.')
+    if phase not in ('ready', 'running', 'failed'):
+        raise ValueError('잘못된 이어쓰기 단계입니다.')
+    RESUME_PATH.parent.mkdir(parents=True, exist_ok=True)
+    obj = {
+        'fingerprint': draft_fingerprint(data),
+        'next_block': int(next_block),
+        'title_done': bool(title_done),
+        'phase': phase,
+        'updated_at': time.time(),
+    }
+    temporary = RESUME_PATH.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(temporary, RESUME_PATH)
+
+
+def clear_resume_checkpoint(data=None):
+    if data is not None and read_resume_checkpoint(data) is None:
+        return
+    try:
+        RESUME_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def resume_block_label(data, index):
+    if index >= len(data['blocks']):
+        return '마지막 문단 이후'
+    block = data['blocks'][index]
+    if block['type'] == 'image':
+        return '사진 ' + Path(block['path']).name
+    return {
+        'hero_quote': '부제목',
+        'question': str(block.get('value', '질문'))[:38],
+        'answer_label': 'A. 표기',
+        'final_quote': '마무리 프레임',
+        'text': '본문 문단',
+    }.get(block['type'], '원고 블록')
+
 
 STYLE_SAMPLE_PATH = CONFIG_DIR / 'style_sample.txt'
 
@@ -772,8 +840,9 @@ def click_below_intro_quote(body_point, offset_px, notify):
 
 def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
                    quote_button, subtitle_quote_style, question_quote_style, final_quote_style,
-                   quote_exit_offset, pause_event, stop_event):
-    """Foreground keyboard entry; never publishes or saves."""
+                   quote_exit_offset, pause_event, stop_event,
+                   start_block=0, title_done=False, progress=None):
+    """Foreground keyboard entry; supports checkpoint restart without rewriting the title."""
     import pyautogui
     pyautogui.PAUSE=.08
     # Do not open another Naver tab on Input Start / F7.
@@ -786,24 +855,31 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
     missing=[b['path'] for b in data['blocks'] if b['type']=='image' and not Path(b['path']).is_file()]
     if missing:
         raise FileNotFoundError('사진이 이동되거나 삭제되었습니다. 사진 폴더를 다시 선택하고 원고를 새로 생성하세요: '+str(missing[0]))
-    type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
-    # Naver SmartEditor: Enter from the title transitions to the first body paragraph.
-    # A previously saved body_point may now hit the title, concatenating the intro.
-    # Do not click the old coordinate here; keep it for quote-exit only.
-    if not body_point:
-        raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
-    check_control(pause_event,stop_event)
-    pyautogui.press('enter')
-    time.sleep(.5)
-    if body_point[1] <= quote_button[1] + 90:
-        raise RuntimeError('본문 좌표가 상단 도구막대에 너무 가깝습니다. 네이버 글쓰기 본문 첫 줄을 다시 지정하세요.')
-    pyautogui.click(*body_point)
-    time.sleep(.55)
-    notify(f'제목과 본문 분리: 본문 좌표 {body_point} 클릭 완료')
-    previous=None
     blocks=data['blocks']
-    for i,b in enumerate(blocks):
+    if not 0 <= start_block <= len(blocks):
+        raise ValueError('이어쓰기 시작 위치가 원고 범위를 벗어났습니다')
+    if not title_done:
+        if progress: progress('title_start', 0)
+        type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
+        # New document only: enter below the title and click its first body line.
+        if not body_point:
+            raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
         check_control(pause_event,stop_event)
+        pyautogui.press('enter')
+        time.sleep(.5)
+        if body_point[1] <= quote_button[1] + 90:
+            raise RuntimeError('본문 좌표가 상단 도구막대에 너무 가깝습니다. 네이버 글쓰기 본문 첫 줄을 다시 지정하세요.')
+        pyautogui.click(*body_point)
+        time.sleep(.55)
+        notify(f'제목과 본문 분리: 본문 좌표 {body_point} 클릭 완료')
+        if progress: progress('title_done', 0)
+    else:
+        notify(f'기존 네이버 글에서 {start_block+1}번째 원고 구간부터 이어서 입력합니다. 제목은 다시 쓰지 않습니다')
+    previous=blocks[start_block-1]['type'] if start_block else None
+    for i in range(start_block, len(blocks)):
+        b=blocks[i]
+        check_control(pause_event,stop_event)
+        if progress: progress('block_start', i)
         kind=b['type']
         next_kind=blocks[i+1]['type'] if i+1<len(blocks) else None
         if kind=='image':
@@ -852,6 +928,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             if kind == 'answer_label':
                 pyautogui.press('enter')  # Keep A. on its own line.
         previous=kind
+        if progress: progress('block_done', i)
         notify(f'입력 중: {i+1}/{len(data["blocks"])}')
     notify('입력 완료 — 인용구 뒤 본문 분리, 마지막 프레임, 사진 다음 A. 위치를 확인하세요. 임시저장은 직접 눌러 주세요')
 
@@ -886,7 +963,7 @@ class App:
         self.menu=tk.StringVar(value='')
         self.api=tk.StringVar(value=os.getenv('OPENAI_API_KEY',''))
         self.use_ai=tk.BooleanVar(value=False)
-        self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
+        self.data=None;self.event=threading.Event();self.pause_event=threading.Event();self.pause_event.set();self.running=False;self.cancel=False;self.stop_event=threading.Event();self.resume_start_block=0;self.resume_title_done=False;self.photo_button=None;self.body_point=None;self.quote_button=None;self.subtitle_quote_style=None;self.question_quote_style=None
         main=ttk.Frame(root,padding=15);main.pack(fill='both',expand=True)
         ttk.Label(main,text='시아애비 블로그 자동작성기',font=('맑은 고딕',21,'bold')).pack(anchor='w',pady=(0,3))
         ttk.Label(main,text='원고 작성부터 사진 첨부까지  ·  '+APP_VERSION,
@@ -1101,7 +1178,7 @@ class App:
                             if b['type']=='hero_quote':
                                 rendered='[부제목] '+b['value']
                             elif b['type']=='final_quote':
-                                rendered='[마무리]\n'+b['value']
+                                rendered='[마무리]'
                             elif b['type']=='image':
                                 rendered='[사진] '+Path(b['path']).name
                             else:
@@ -1123,7 +1200,13 @@ class App:
     def apply_pasted_draft(self):
         try:
             self.data=self.current_draft()
-            self.setstatus('원고 적용 완료 · 이제 [입력 시작 (F7)]만 누르면 됩니다 (네이버 입력 시작 단계 불필요)')
+            checkpoint=read_resume_checkpoint(self.data)
+            self.go.config(text='이전 중단 구간 이어쓰기 (F7)' if checkpoint else '원고 적용 후 바로 입력 시작 (F7)')
+            if checkpoint:
+                self.setstatus('원고 적용 완료 · 이전 작업 ' + resume_block_label(self.data,checkpoint['next_block'])
+                               + ' 부터 이어쓰기 가능 (F7)')
+            else:
+                self.setstatus('원고 적용 완료 · 이제 [입력 시작 (F7)]만 누르면 됩니다 (네이버 입력 시작 단계 불필요)')
         except Exception as e:
             messagebox.showerror('원고 확인',str(e))
     def preview(self):
@@ -1148,8 +1231,78 @@ class App:
             return messagebox.showwarning('본문 위치 확인',
                 '저장된 본문 좌표가 도구막대 또는 제목 칸일 수 있습니다. '
                 '네이버 글쓰기 화면의 제목 아래 본문 첫 줄을 다시 지정하세요.')
-        if not messagebox.askyesno('중요','이미 열어둔 네이버 글쓰기 창을 사용하며 새 네이버 창은 열리지 않습니다.\n확인을 누른 뒤 기존 글쓰기 화면의 제목 칸을 클릭하세요.\n네이버 상단 초록색 [사진] 버튼 위치를 미리 지정하세요. 파일 선택 창이 열리지 않으면 안전하게 중지합니다.\n입력 중 마우스/키보드를 사용하지 마세요.\n임시저장은 직접 눌러야 합니다. 계속할까요?'):return
-        self.event.clear();self.pause_event.set();self.stop_event.clear();self.running=True;self.cancel=False;self.go.config(state='normal');self.pause_button.config(state='normal',text='일시정지');self.stop_button.config(state='normal')
+
+        checkpoint = read_resume_checkpoint(self.data)
+        start_block = 0
+        title_done = False
+        if checkpoint:
+            index = checkpoint['next_block']
+            label = resume_block_label(self.data, index)
+            answer = messagebox.askyesnocancel(
+                '이전 작업 발견',
+                f'이전에 {label} 구간에서 입력이 중단됐습니다.\n'
+                f'완료 기록: {index}/{len(self.data["blocks"])}개 원고 블록\n\n'
+                '예: 기존 네이버 글에서 이어쓰기\n'
+                '아니요: 새 글을 처음부터 입력\n'
+                '취소: 아무것도 하지 않기\n\n'
+                '※ 원고와 사진 폴더가 같을 때만 이어쓰기할 수 있습니다.')
+            if answer is None:return
+            if answer:
+                start_block=index
+                title_done=checkpoint['title_done']
+                if title_done and start_block >= len(self.data['blocks']):
+                    return messagebox.showinfo('이미 입력 완료',
+                        '마지막 블록까지 완료 기록이 있습니다. 네이버 글을 확인하거나 처음부터 새 글로 시작해 주세요.')
+                if checkpoint['phase'] in ('running','failed'):
+                    if title_done:
+                        choice = messagebox.askyesnocancel(
+                            '실패 구간 정리 후 재개',
+                            f'실패한 부분: {label}\n\n'
+                            '예: 이 블록을 다시 입력\n'
+                            '    (기존에 부분 입력된 글이나 사진이 있다면 먼저 삭제)\n'
+                            '아니요: 이 블록이 이미 완성된 것을 확인했으므로 건너뛰기\n'
+                            '취소: 중단\n\n'
+                            '사진이 실제로 첨부됐는지 먼저 확인해 중복을 방지하세요.')
+                        if choice is None:return
+                        if not choice:
+                            start_block += 1
+                    elif not messagebox.askyesno(
+                            '제목 부분 입력 확인',
+                            '제목 작성 중 중단됐습니다.\n'
+                            '네이버 제목 칸의 부분 입력 내용을 지운 뒤\n'
+                            '제목 칸을 클릭할 수 있나요?\n\n'
+                            '준비됐다면 예를 누르세요.'):
+                        return
+            else:
+                if not messagebox.askyesno('새 글 시작 확인',
+                        '처음부터 입력하려면 기존 네이버 글쓰기 내용이 비어 있어야 합니다.\n'
+                        '기존 글을 지우거나 새 글쓰기 화면을 열었나요?'):
+                    return
+                # Keep the old checkpoint until the final start confirmation.
+                # Cancelling the next dialog must not erase recovery state.
+
+        if not messagebox.askyesno(
+                '입력 시작 확인',
+                ('기존 글에서 이어서 입력합니다. 제목은 다시 쓰지 않습니다.\n'
+                 f'시작 구간: {resume_block_label(self.data,start_block)}\n'
+                 '이전까지 완료된 내용 뒤에 커서를 정확히 두세요.\n'
+                 '사진 선택 창과 이미지 뷰어를 모두 닫아야 합니다.\n\n'
+                 if title_done else
+                 '새 글 입력입니다. 기존에 열어 둔 네이버 글쓰기 화면의 제목 칸을 클릭하세요.\n'
+                 '네이버 새 창은 열지 않습니다.\n\n')
+                + '확인을 누른 뒤 5초 안에 네이버 입력 위치를 클릭하세요.\n'
+                  '입력 중 마우스/키보드를 사용하지 마세요.\n'
+                  '임시저장은 직접 눌러야 합니다. 계속할까요?'):
+            return
+
+        self.resume_start_block=start_block
+        self.resume_title_done=title_done
+        write_resume_checkpoint(self.data,start_block,title_done,'ready')
+        self.event.clear();self.pause_event.set();self.stop_event.clear()
+        self.running=True;self.cancel=False
+        self.go.config(state='normal')
+        self.pause_button.config(state='normal',text='일시정지')
+        self.stop_button.config(state='normal')
         threading.Thread(target=self.worker,daemon=True).start()
     def begin(self):
         if not self.running:
@@ -1197,12 +1350,50 @@ class App:
 
     def worker(self):
         def wait():return self.event.wait(300)
-        try:automate_naver(self.data,self.setstatus,wait,self.photo_button,self.body_point,self.quote_button,self.subtitle_quote_style,self.question_quote_style,self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,self.stop_event)
-        except InputCancelled as e:self.setstatus(str(e))
-        except Exception as e:self.setstatus('자동 입력 실패: '+str(e)+' / 미리보기에서 수동 복사해 주세요.')
+        finished=False
+        def save_progress(stage,index):
+            if stage=='title_start':
+                write_resume_checkpoint(self.data,0,False,'running')
+            elif stage=='title_done':
+                write_resume_checkpoint(self.data,0,True,'ready')
+            elif stage=='block_start':
+                write_resume_checkpoint(self.data,index,True,'running')
+            elif stage=='block_done':
+                write_resume_checkpoint(self.data,index+1,True,'ready')
+            else:
+                raise ValueError('알 수 없는 입력 진행 단계: '+str(stage))
+        try:
+            automate_naver(
+                self.data,self.setstatus,wait,self.photo_button,self.body_point,
+                self.quote_button,self.subtitle_quote_style,self.question_quote_style,
+                self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,
+                self.stop_event,start_block=self.resume_start_block,
+                title_done=self.resume_title_done,progress=save_progress)
+            clear_resume_checkpoint(self.data)
+            finished=True
+        except InputCancelled as e:
+            self.setstatus(str(e)+' · F7로 중단 위치부터 이어쓰기할 수 있습니다')
+        except Exception as e:
+            self.setstatus('자동 입력 실패: '+str(e)
+                           +' · 네이버 화면의 부분 입력을 확인한 뒤 F7로 실패 구간부터 이어쓰세요')
         finally:
+            if not finished:
+                checkpoint=read_resume_checkpoint(self.data)
+                if checkpoint:
+                    try:
+                        write_resume_checkpoint(
+                            self.data,checkpoint['next_block'],
+                            checkpoint['title_done'],'failed')
+                    except OSError:
+                        self.setstatus('진행 위치 파일 저장 실패 — 자동 이어쓰기 기록을 확인할 수 없습니다')
             self.running=False;self.pause_event.set()
-            self.root.after(0,lambda:(self.go.config(state='normal'),self.pause_button.config(state='disabled',text='일시정지'),self.stop_button.config(state='disabled')))
+            def restore_buttons():
+                checkpoint=read_resume_checkpoint(self.data)
+                label='이전 중단 구간 이어쓰기 (F7)' if checkpoint else '원고 적용 후 바로 입력 시작 (F7)'
+                self.go.config(state='normal',text=label)
+                self.pause_button.config(state='disabled',text='일시정지')
+                self.stop_button.config(state='disabled')
+            self.root.after(0,restore_buttons)
 
 if __name__=='__main__':
     root=tk.Tk();apply_app_icon(root);App(root);root.mainloop()

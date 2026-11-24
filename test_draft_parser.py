@@ -250,6 +250,72 @@ class DraftParsingTests(unittest.TestCase):
         self.assertNotIn("hotkey('ctrl', 'l')", body)
         self.assertIn("사진 선택 후 네이버 브라우저가 활성화되지 않았습니다", body)
 
+    def test_resume_checkpoint_matches_exact_draft(self):
+        import app
+        from unittest.mock import patch
+        draft = app.parse_pasted_draft(
+            "후킹 제목\n[부제목] 맛집 메뉴\nQ. 외관은?\n[사진 1]\nA.\n좋아요",
+            self.photos)
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(app, "RESUME_PATH", Path(folder) / "resume.json"):
+                app.write_resume_checkpoint(draft, 2, True, "running")
+                self.assertEqual(app.read_resume_checkpoint(draft)["next_block"], 2)
+                self.assertEqual(app.read_resume_checkpoint(draft)["phase"], "running")
+                changed = dict(draft, title="다른 블로그 제목")
+                self.assertIsNone(app.read_resume_checkpoint(changed))
+                app.write_resume_checkpoint(draft, 3, True, "ready")
+                self.assertEqual(app.read_resume_checkpoint(draft)["next_block"], 3)
+                app.clear_resume_checkpoint(draft)
+                self.assertIsNone(app.read_resume_checkpoint(draft))
+
+    def test_resumed_automator_skips_title_and_completed_blocks(self):
+        import app
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import sys
+        draft = {"title": "다시 쓰면 안 되는 제목", "blocks": [
+            {"type": "text", "value": "이미 입력된 내용"},
+            {"type": "text", "value": "이어쓸 내용"}]}
+        calls = []
+        fake = SimpleNamespace(PAUSE=0,press=lambda *a,**k: None)
+        with patch.dict(sys.modules, {"pyautogui": fake}):
+            with patch.object(app, "type_unicode_text") as typed:
+                with patch.object(app, "check_control"), patch.object(app.time, "sleep"):
+                    app.automate_naver(
+                        draft, lambda message: None, lambda: True,
+                        (200,100), (800,500), (500,100), (600,200),
+                        (600,250), (600,300), 500, None, None,
+                        start_block=1, title_done=True,
+                        progress=lambda stage,index: calls.append((stage,index)))
+        self.assertEqual(typed.call_count, 1)
+        self.assertEqual(typed.call_args.args[0], "이어쓸 내용")
+        self.assertEqual(calls, [("block_start", 1), ("block_done", 1)])
+
+    def test_resume_after_image_keeps_image_previous_block_semantics(self):
+        import app
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import sys
+        draft = {"title": "제목", "blocks": [
+            {"type": "question", "value": "Q. 어떤가요?"},
+            {"type": "image", "path": str(self.photos[0])},
+            {"type": "answer_label", "value": "A."},
+            {"type": "text", "value": "답변 내용"}]}
+        calls = []
+        fake = SimpleNamespace(PAUSE=0, press=lambda *a,**k: calls.append(a))
+        with patch.dict(sys.modules, {"pyautogui": fake}):
+            with patch.object(app, "type_unicode_text") as typed:
+                with patch.object(app, "check_control"), patch.object(app.time, "sleep"):
+                    app.automate_naver(
+                        draft, lambda message: None, lambda: True,
+                        (200,100), (800,500), (500,100), (600,200),
+                        (600,250), (600,300), 500, None, None,
+                        start_block=2, title_done=True)
+        self.assertEqual(typed.call_count, 2)
+        self.assertEqual(typed.call_args_list[0].args[0], "A.")
+        self.assertEqual(typed.call_args_list[1].args[0], "답변 내용")
+        self.assertEqual(calls, [('enter',)])
+
     def test_normal_question_keeps_question_quote_style(self):
         data=parse_pasted_draft("제목\nQ. 메뉴는 어떤가요?\nA.\n좋아요",self.photos)
         self.assertEqual(data["blocks"][0]["type"],"question")
