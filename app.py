@@ -711,26 +711,27 @@ def upload_via_naver_button(path, photo_button, notify):
                 break
             time.sleep(.25)
 
+    # Do NOT use Ctrl+L with a full image path. When focus changes unexpectedly
+    # it may open the image in a browser/viewer rather than upload to Naver.
     if not dialog_closed():
-        # Fallback 2: Windows Open dialog accepts a full path in the address bar.
-        notify('파일 이름 입력이 실패하여 경로 표시줄로 재시도합니다')
-        pyautogui.hotkey('ctrl', 'l')
-        time.sleep(.25)
-        pyperclip.copy(str(path))
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(.3)
-        pyautogui.press('enter')
-        for _ in range(24):
-            if dialog_closed():
-                break
-            time.sleep(.25)
-
-    if not dialog_closed():
-        raise RuntimeError('사진 선택 창에 파일 경로를 입력했지만 창이 닫히지 않았습니다. '
-                           '사진 파일을 수동으로 선택할 수 있다면 Windows 파일명 입력 컨트롤 차이일 수 있습니다: '
-                           + path.name)
-    time.sleep(3.0 if path.suffix.lower() != '.gif' else 4.5)
-    notify('사진 선택 완료: ' + path.name + ' — 네이버 본문에서 이미지 업로드를 확인하세요')
+        raise RuntimeError(
+            '사진 파일 선택 창이 그대로 열려 있어 자동입력을 중단했습니다: '
+            + path.name + '. 파일 이름 칸에 정확한 경로가 들어갔는지 확인하세요.')
+    # File dialog closing does NOT guarantee that Naver has received the image.
+    # If a photo viewer or Explorer has focus, stop before typing A. into it.
+    time.sleep(.65)
+    active_hwnd = win32gui.GetForegroundWindow()
+    active_class = win32gui.GetClassName(active_hwnd) if active_hwnd else ''
+    active_title = win32gui.GetWindowText(active_hwnd) if active_hwnd else ''
+    if active_class not in ('Chrome_WidgetWin_1', 'MozillaWindowClass'):
+        raise RuntimeError(
+            '사진 선택 후 네이버 브라우저가 활성화되지 않았습니다. '
+            '사진이 뷰어로 열렸거나 다른 창에 포커스가 있을 수 있습니다. '
+            '자동입력을 중단했습니다: ' + path.name + ' / 활성 창: ' + active_title[:70])
+    notify('사진 선택 창 닫힘 · 네이버 화면 복귀 확인: ' + path.name)
+    # Allow slower OneDrive/synced images to finish loading before A. is entered.
+    time.sleep(6.0 if path.suffix.lower() != '.gif' else 7.5)
+    notify('사진 처리 대기 완료: ' + path.name + ' (실제 게시글 이미지 표시 여부는 화면에서 확인)')
 
 
 def apply_quote(quote_button, quote_style, notify):
@@ -755,8 +756,8 @@ def exit_final_quote(notify):
     import pyautogui
     pyautogui.press('end')
     pyautogui.press('enter', presses=2, interval=.2)
-    time.sleep(.35)
-    notify('마지막 총평 인용구 종료: Enter 두 번 후 A. 입력')
+    time.sleep(.45)
+    notify('마무리한마디 프레임 종료: 다음 줄부터 일반 본문 입력')
 
 
 def click_below_intro_quote(body_point, offset_px, notify):
@@ -814,6 +815,9 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
         kind=b['type']
         next_kind=blocks[i+1]['type'] if i+1<len(blocks) else None
         if kind=='image':
+            notify('사진 ' + str(sum(1 for prev in blocks[:i+1] if prev['type']=='image'))
+                   + '/' + str(sum(1 for item in blocks if item['type']=='image'))
+                   + ' 첨부 시도: ' + Path(b['path']).name)
             upload_via_naver_button(b['path'],photo_button,notify)
             check_control(pause_event,stop_event)
             # The user specifically wants A. immediately after the photo.
