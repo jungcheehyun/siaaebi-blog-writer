@@ -605,16 +605,17 @@ def upload_via_naver_button(path, photo_button, notify):
     path=Path(path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f'사진 파일이 존재하지 않습니다: {path}\n원고 생성 후 사진 폴더를 옮겼다면 원고를 다시 생성하세요.')
-    if not _wait_for_native_file_dialog(timeout=.3):
-        # Naver SmartEditor toolbar: click the green '사진' icon itself,
-        # not the media menu or the editor body.
-        x, y = photo_button
-        width, height = pyautogui.size()
-        if not (0 <= x < width and 0 <= y < height):
-            raise RuntimeError(f'저장된 사진 버튼 좌표 {(x, y)}가 현재 화면 범위를 벗어났습니다. 위치를 다시 지정하세요.')
-        notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
-        pyautogui.moveTo(x, y, duration=.3)
-        pyautogui.click(x=x, y=y)
+    if _wait_for_native_file_dialog(timeout=.3):
+        raise RuntimeError('이전 사진 선택 창이 아직 열려 있습니다. 창을 닫고 다시 입력을 시작하세요: ' + path.name)
+    # Naver SmartEditor toolbar: click the green '사진' icon itself,
+    # not the media menu or the editor body.
+    x, y = photo_button
+    width, height = pyautogui.size()
+    if not (0 <= x < width and 0 <= y < height):
+        raise RuntimeError(f'저장된 사진 버튼 좌표 {(x, y)}가 현재 화면 범위를 벗어났습니다. 위치를 다시 지정하세요.')
+    notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
+    pyautogui.moveTo(x, y, duration=.3)
+    pyautogui.click(x=x, y=y)
     if not _wait_for_native_file_dialog(timeout=8.0):
         raise RuntimeError(
             '상단 [사진] 버튼 클릭 후 Windows 파일 선택 창을 확인하지 못했습니다.\n'
@@ -679,6 +680,9 @@ def upload_via_naver_button(path, photo_button, notify):
     except Exception as e:
         notify('Windows 기본 파일명 입력 확인 실패, 대체 방식으로 전환: ' + str(e))
         opened = False
+    if not opened:
+        raise RuntimeError('사진 파일 이름 입력칸에 경로를 확인할 수 없습니다. '
+                           '잘못된 파일이 열리지 않도록 자동 첨부를 중단했습니다: ' + path.name)
     if opened:
         notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
         # Clicking the actual Open button commits the combo box value.
@@ -696,23 +700,9 @@ def upload_via_naver_button(path, photo_button, notify):
                 break
             time.sleep(.25)
 
-    if not dialog_closed():
-        # Fallback 1: use the localized File name shortcut.
-        notify('사진 선택 창이 열려 있어 Alt+N 방식으로 다시 시도합니다')
-        pyautogui.hotkey('alt', 'n')
-        time.sleep(.3)
-        pyperclip.copy(str(path))
-        pyautogui.hotkey('ctrl', 'a')
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(.35)
-        pyautogui.press('enter')
-        for _ in range(20):
-            if dialog_closed():
-                break
-            time.sleep(.25)
-
-    # Do NOT use Ctrl+L with a full image path. When focus changes unexpectedly
-    # it may open the image in a browser/viewer rather than upload to Naver.
+    # Never retry blind Alt+N/Enter here: Enter can open a highlighted file
+    # or a viewer when filename focus is not guaranteed.
+    # Do NOT use Ctrl+L with a full image path either.
     if not dialog_closed():
         raise RuntimeError(
             '사진 파일 선택 창이 그대로 열려 있어 자동입력을 중단했습니다: '
