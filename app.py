@@ -840,8 +840,9 @@ def click_below_intro_quote(body_point, offset_px, notify):
 
 def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
                    quote_button, subtitle_quote_style, question_quote_style, final_quote_style,
-                   quote_exit_offset, pause_event, stop_event):
-    """Foreground keyboard entry; never publishes or saves."""
+                   quote_exit_offset, pause_event, stop_event,
+                   start_block=0, title_done=False, progress=None):
+    """Foreground keyboard entry; supports checkpoint restart without rewriting the title."""
     import pyautogui
     pyautogui.PAUSE=.08
     # Do not open another Naver tab on Input Start / F7.
@@ -854,24 +855,31 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
     missing=[b['path'] for b in data['blocks'] if b['type']=='image' and not Path(b['path']).is_file()]
     if missing:
         raise FileNotFoundError('사진이 이동되거나 삭제되었습니다. 사진 폴더를 다시 선택하고 원고를 새로 생성하세요: '+str(missing[0]))
-    type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
-    # Naver SmartEditor: Enter from the title transitions to the first body paragraph.
-    # A previously saved body_point may now hit the title, concatenating the intro.
-    # Do not click the old coordinate here; keep it for quote-exit only.
-    if not body_point:
-        raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
-    check_control(pause_event,stop_event)
-    pyautogui.press('enter')
-    time.sleep(.5)
-    if body_point[1] <= quote_button[1] + 90:
-        raise RuntimeError('본문 좌표가 상단 도구막대에 너무 가깝습니다. 네이버 글쓰기 본문 첫 줄을 다시 지정하세요.')
-    pyautogui.click(*body_point)
-    time.sleep(.55)
-    notify(f'제목과 본문 분리: 본문 좌표 {body_point} 클릭 완료')
-    previous=None
     blocks=data['blocks']
-    for i,b in enumerate(blocks):
+    if not 0 <= start_block <= len(blocks):
+        raise ValueError('이어쓰기 시작 위치가 원고 범위를 벗어났습니다')
+    if not title_done:
+        if progress: progress('title_start', 0)
+        type_unicode_text(data['title'],pause_event=pause_event,stop_event=stop_event)
+        # New document only: enter below the title and click its first body line.
+        if not body_point:
+            raise RuntimeError('인용구 아래 본문 좌표가 지정되지 않았습니다')
         check_control(pause_event,stop_event)
+        pyautogui.press('enter')
+        time.sleep(.5)
+        if body_point[1] <= quote_button[1] + 90:
+            raise RuntimeError('본문 좌표가 상단 도구막대에 너무 가깝습니다. 네이버 글쓰기 본문 첫 줄을 다시 지정하세요.')
+        pyautogui.click(*body_point)
+        time.sleep(.55)
+        notify(f'제목과 본문 분리: 본문 좌표 {body_point} 클릭 완료')
+        if progress: progress('title_done', 0)
+    else:
+        notify(f'기존 네이버 글에서 {start_block+1}번째 원고 구간부터 이어서 입력합니다. 제목은 다시 쓰지 않습니다')
+    previous=blocks[start_block-1]['type'] if start_block else None
+    for i in range(start_block, len(blocks)):
+        b=blocks[i]
+        check_control(pause_event,stop_event)
+        if progress: progress('block_start', i)
         kind=b['type']
         next_kind=blocks[i+1]['type'] if i+1<len(blocks) else None
         if kind=='image':
@@ -920,6 +928,7 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             if kind == 'answer_label':
                 pyautogui.press('enter')  # Keep A. on its own line.
         previous=kind
+        if progress: progress('block_done', i)
         notify(f'입력 중: {i+1}/{len(data["blocks"])}')
     notify('입력 완료 — 인용구 뒤 본문 분리, 마지막 프레임, 사진 다음 A. 위치를 확인하세요. 임시저장은 직접 눌러 주세요')
 
