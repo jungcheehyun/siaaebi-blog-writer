@@ -1278,7 +1278,8 @@ class App:
                         '처음부터 입력하려면 기존 네이버 글쓰기 내용이 비어 있어야 합니다.\n'
                         '기존 글을 지우거나 새 글쓰기 화면을 열었나요?'):
                     return
-                clear_resume_checkpoint(self.data)
+                # Keep the old checkpoint until the final start confirmation.
+                # Cancelling the next dialog must not erase recovery state.
 
         if not messagebox.askyesno(
                 '입력 시작 확인',
