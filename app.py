@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.18'
+APP_VERSION = 'v18.19'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -83,6 +83,74 @@ CONFIG_DIR = Path(os.getenv('LOCALAPPDATA') or (Path.home() / 'AppData' / 'Local
 CONFIG_PATH = CONFIG_DIR / 'editor_positions.json'
 POSITION_FIELDS = ('photo_button', 'body_point', 'quote_button',
                    'subtitle_quote_style', 'question_quote_style', 'final_quote_style')
+
+RESUME_PATH = CONFIG_DIR / 'resume_checkpoint.json'
+
+
+def draft_fingerprint(data):
+    """Checkpoints only apply to the exact text, ordering and image paths."""
+    raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def read_resume_checkpoint(data):
+    try:
+        saved = json.loads(RESUME_PATH.read_text(encoding='utf-8'))
+        if saved.get('fingerprint') != draft_fingerprint(data):
+            return None
+        index = saved.get('next_block')
+        if type(index) is not int or not 0 <= index <= len(data['blocks']):
+            return None
+        if type(saved.get('title_done')) is not bool:
+            return None
+        if saved.get('phase') not in ('ready', 'running', 'failed'):
+            return None
+        return saved
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def write_resume_checkpoint(data, next_block, title_done, phase):
+    if not 0 <= next_block <= len(data['blocks']):
+        raise ValueError('이어쓰기 구간이 원고 범위를 벗어났습니다.')
+    if phase not in ('ready', 'running', 'failed'):
+        raise ValueError('잘못된 이어쓰기 단계입니다.')
+    RESUME_PATH.parent.mkdir(parents=True, exist_ok=True)
+    obj = {
+        'fingerprint': draft_fingerprint(data),
+        'next_block': int(next_block),
+        'title_done': bool(title_done),
+        'phase': phase,
+        'updated_at': time.time(),
+    }
+    temporary = RESUME_PATH.with_suffix('.json.tmp')
+    temporary.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(temporary, RESUME_PATH)
+
+
+def clear_resume_checkpoint(data=None):
+    if data is not None and read_resume_checkpoint(data) is None:
+        return
+    try:
+        RESUME_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def resume_block_label(data, index):
+    if index >= len(data['blocks']):
+        return '마지막 문단 이후'
+    block = data['blocks'][index]
+    if block['type'] == 'image':
+        return '사진 ' + Path(block['path']).name
+    return {
+        'hero_quote': '부제목',
+        'question': str(block.get('value', '질문'))[:38],
+        'answer_label': 'A. 표기',
+        'final_quote': '마무리 프레임',
+        'text': '본문 문단',
+    }.get(block['type'], '원고 블록')
+
 
 STYLE_SAMPLE_PATH = CONFIG_DIR / 'style_sample.txt'
 
