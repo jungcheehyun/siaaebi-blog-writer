@@ -14,6 +14,57 @@ class DraftParsingTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_chatgpt_prompt_matches_parser_and_prefills_current_fields(self):
+        import app
+        prompt=app.build_chatgpt_draft_prompt(
+            shop="복실네 평양찹쌀순대", menu="평양정식, 만둣국",
+            keywords="의정부 순대국 맛집", photo_count=13)
+        self.assertIn("상호명: 복실네 평양찹쌀순대", prompt)
+        self.assertIn("대표메뉴: 평양정식, 만둣국", prompt)
+        self.assertIn("검색 키워드: 의정부 순대국 맛집", prompt)
+        self.assertIn("사진 수: 13장 — 사진 1부터 사진 13까지", prompt)
+        self.assertIn("[부제목]", prompt)
+        self.assertIn("Q. 사진 내용과 관련된 자연스러운 질문?", prompt)
+        self.assertIn("[사진 1]\nA.\n", prompt)
+        self.assertIn("[마무리]\n", prompt)
+        self.assertIn("말투", prompt)
+        self.assertIn("완성 원고만 출력", prompt)
+        self.assertNotIn("OPENAI_API_KEY",prompt)
+        sample = ("후킹 제목\n[부제목] 의정부 순대국 맛집 복실네\n"
+                  "안녕하세요\nQ. 어떤가요?\n[사진 1]\nA.\n맛있어요\n"
+                  "[마무리]\n또 먹고 싶어요\n#의정부맛집")
+        parsed = app.parse_pasted_draft(sample, self.photos)
+        self.assertEqual([b["type"] for b in parsed["blocks"]],
+                         ["hero_quote","text","question","image","answer_label",
+                          "text","final_quote","text","text"])
+        self.assertEqual(parsed["blocks"][-3]["value"], "마무리한마디")
+
+    def test_copy_chatgpt_prompt_button_writes_clipboard_without_browser(self):
+        import app
+        from unittest.mock import MagicMock, patch
+        from types import SimpleNamespace
+        root=MagicMock()
+        root.clipboard_append.side_effect=lambda value: None
+        fake=SimpleNamespace(
+            folder=SimpleNamespace(get=lambda: "photos"),
+            shop=SimpleNamespace(get=lambda: "복실네"),
+            menu=SimpleNamespace(get=lambda: "순대국"),
+            keywords=SimpleNamespace(get=lambda *args: "지역맛집\n"),
+            root=root,
+            setstatus=MagicMock())
+        with patch.object(app, "sorted_photos", return_value=self.photos), \
+             patch.object(app.messagebox, "showinfo") as info, \
+             patch.object(app.messagebox, "showerror") as error, \
+             patch.object(app.webbrowser, "open") as browse:
+            app.App.copy_chatgpt_prompt(fake)
+        root.clipboard_clear.assert_called_once()
+        root.clipboard_append.assert_called_once()
+        root.update_idletasks.assert_called_once()
+        self.assertIn("사진 수: 2장", root.clipboard_append.call_args.args[0])
+        info.assert_called_once()
+        error.assert_not_called()
+        browse.assert_not_called()
+
     def test_natural_photo_marker_and_bold_question(self):
         raw = ("의정부 양촌리 후기\n\n"
                "**Q. 양촌리는 어떤 곳일까요?**\n"
