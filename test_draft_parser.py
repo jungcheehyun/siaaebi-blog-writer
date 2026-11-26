@@ -67,6 +67,53 @@ class DraftParsingTests(unittest.TestCase):
         self.assertIn("_write_windows_file_name(edit,str(path))",body)
         self.assertIn("_paste_windows_file_name(edit,str(path))",body)
 
+    def test_final_frame_exit_creates_separate_normal_paragraph(self):
+        import app, sys
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        actions=[]
+        fake=SimpleNamespace(
+            press=lambda key,**kwargs: actions.append(('press',key,kwargs)))
+        with patch.dict(sys.modules,{'pyautogui':fake}):
+            with patch.object(app.time,'sleep'):
+                app.exit_final_quote(lambda msg: actions.append(('notify',msg,{})))
+        presses=[(name,kwargs) for typ,name,kwargs in actions if typ=='press']
+        self.assertEqual([name for name,_ in presses],['end','down','enter'])
+        self.assertEqual(presses[1][1]['presses'],2)
+        self.assertEqual(presses[1][1]['interval'],.3)
+        self.assertNotEqual([name for name,_ in presses],['end','enter'])
+
+    def test_photo_delay_is_saved_per_pc_and_old_config_defaults_to_12(self):
+        import json, app
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            config=Path(folder)/'editor_positions.json'
+            config.write_text(json.dumps({'quote_exit_offset':500,
+                                          'body_anchor_verified':True}),encoding='utf-8')
+            with patch.object(app,'CONFIG_PATH',config):
+                self.assertEqual(app.load_editor_positions()['photo_settle_seconds'],12)
+            controls=SimpleNamespace(
+                quote_exit_offset=SimpleNamespace(get=lambda:500),
+                photo_settle_seconds=SimpleNamespace(get=lambda:22),
+                body_anchor_verified=True,
+                **{name:(700,450) for name in app.POSITION_FIELDS})
+            with patch.object(app,'CONFIG_DIR',Path(folder)),patch.object(app,'CONFIG_PATH',config):
+                app.save_editor_positions(controls)
+                loaded=app.load_editor_positions()
+            self.assertEqual(loaded['photo_settle_seconds'],22)
+            self.assertEqual(loaded['body_point'],(700,450))
+            self.assertTrue(loaded['body_anchor_verified'])
+
+    def test_slow_pc_photo_delay_is_configurable_and_bounded(self):
+        import app,inspect
+        source=inspect.getsource(app.upload_via_naver_button)
+        self.assertIn('photo_settle_seconds=12',inspect.signature(app.upload_via_naver_button).__str__())
+        self.assertIn('delay=min(36,base+size_padding+',source)
+        self.assertIn('_wait_for_native_file_dialog(timeout=16.0)',source)
+        self.assertIn('range(100)',source)
+        self.assertIn('네이버 사진 처리 대기',source)
+
     def test_chatgpt_prompt_matches_parser_and_prefills_current_fields(self):
         import app
         prompt=app.build_chatgpt_draft_prompt(
