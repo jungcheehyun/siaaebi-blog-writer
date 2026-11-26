@@ -14,6 +14,60 @@ class DraftParsingTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_short_filename_numbers_sort_and_resolve_in_order(self):
+        import app
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name in ("10.jpg","2.jpg","1.jpg","3.png"):
+                (root/name).write_bytes(b"test")
+            photos=app.sorted_photos(root)
+            self.assertEqual([p.name for p in photos],
+                             ["1.jpg","2.jpg","3.png","10.jpg"])
+            parsed=app.parse_pasted_draft(
+                "후킹 제목\n[부제목] 김선장횟집 방어회\n"
+                "Q. 매장 모습은?\n[사진 1]\nA.\n좋아요\n"
+                "Q. 음식은?\n[사진 2]\nA.\n맛있어요",photos)
+            images=[b["path"] for b in parsed["blocks"] if b["type"]=="image"]
+            self.assertEqual([Path(p).name for p in images],["1.jpg","2.jpg"])
+
+    def test_filename_focus_shortcut_does_not_fire_if_another_window_is_active(self):
+        import app,sys
+        from unittest.mock import patch,MagicMock
+        from types import SimpleNamespace
+        fake_gui=SimpleNamespace(GetForegroundWindow=lambda:777)
+        fake_auto=SimpleNamespace(hotkey=MagicMock())
+        with patch.dict(sys.modules,{"win32gui":fake_gui,"pyautogui":fake_auto}):
+            focused=app._recover_filename_control_with_shortcut(
+                123,lambda value:None)
+        self.assertIsNone(focused)
+        fake_auto.hotkey.assert_not_called()
+
+    def test_filename_focus_shortcut_checks_focus_after_keypress(self):
+        import app,sys
+        from unittest.mock import patch,MagicMock
+        from types import SimpleNamespace
+        fake_gui=SimpleNamespace(GetForegroundWindow=lambda:123)
+        fake_auto=SimpleNamespace(hotkey=MagicMock())
+        with patch.dict(sys.modules,{"win32gui":fake_gui,"pyautogui":fake_auto}):
+            with patch.object(app,"_focused_windows_filename_control",
+                              return_value=456) as focus:
+                with patch.object(app.time,"sleep"):
+                    value=app._recover_filename_control_with_shortcut(
+                        123,lambda value:None)
+        self.assertEqual(value,456)
+        fake_auto.hotkey.assert_called_once_with("alt","n")
+        focus.assert_called_once_with(123)
+
+    def test_file_picker_recovery_is_path_verified_and_never_blind_enter(self):
+        import app,inspect
+        source=inspect.getsource(app.upload_via_naver_button)
+        self.assertIn("_recover_filename_control_with_shortcut(dialog,notify)",source)
+        self.assertIn("_write_windows_file_name(focus_edit,str(path))",source)
+        self.assertIn("_paste_windows_file_name(focus_edit,str(path))",source)
+        self.assertIn("if not opened:",source)
+        self.assertNotIn("pyautogui.press('enter')",source)
+        self.assertNotIn("hotkey('ctrl', 'l')",source)
+
     def test_windows_filename_is_written_and_verified_with_correct_win32_lengths(self):
         import ctypes
         import app
