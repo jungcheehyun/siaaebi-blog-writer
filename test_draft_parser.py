@@ -14,6 +14,59 @@ class DraftParsingTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_windows_filename_is_written_and_verified_with_correct_win32_lengths(self):
+        import ctypes
+        import app
+        filename=r'C:\\Users\\user\\OneDrive\\사진\\한글 사진 01.jpg'
+        writes=[]
+        state={'value':''}
+        def sender(hwnd,msg,wparam,ptr,flags,timeout,result):
+            if msg==0x000C:
+                self.assertEqual(wparam,0)
+                state['value']=ctypes.wstring_at(ptr)
+                writes.append(('set',wparam))
+                ctypes.cast(result,ctypes.POINTER(ctypes.c_size_t))[0]=1
+            elif msg==0x000D:
+                # Regression: old code sent wParam=0 and could only read empty text.
+                self.assertGreater(wparam,len(state['value']))
+                self.assertGreater(wparam,0)
+                value=ctypes.create_unicode_buffer(state['value'])
+                ctypes.memmove(ptr,value,ctypes.sizeof(value))
+                writes.append(('get',wparam))
+                ctypes.cast(result,ctypes.POINTER(ctypes.c_size_t))[0]=len(state['value'])
+            else:
+                self.fail('unexpected native message')
+            return 1
+        self.assertTrue(app._write_windows_file_name(12345,filename,sender=sender))
+        self.assertEqual(state['value'],filename)
+        self.assertEqual([kind for kind,_ in writes],['set','get'])
+
+    def test_windows_filename_verification_rejects_empty_or_wrong_text(self):
+        import ctypes
+        import app
+        expected=r'C:\\Pictures\\correct.jpg'
+        for response in ('',r'C:\\Pictures\\wrong.jpg'):
+            with self.subTest(response=response):
+                def sender(hwnd,msg,wparam,ptr,flags,timeout,result):
+                    if msg==0x000D:
+                        self.assertGreater(wparam,0)
+                        data=ctypes.create_unicode_buffer(response)
+                        ctypes.memmove(ptr,data,ctypes.sizeof(data))
+                        ctypes.cast(result,ctypes.POINTER(ctypes.c_size_t))[0]=len(response)
+                    else:
+                        ctypes.cast(result,ctypes.POINTER(ctypes.c_size_t))[0]=1
+                    return 1
+                self.assertFalse(app._verify_windows_file_name(12345,expected,sender=sender))
+
+    def test_photo_upload_does_not_use_unverified_enter_or_address_bar(self):
+        import inspect,app
+        body=inspect.getsource(app.upload_via_naver_button)
+        self.assertNotIn("hotkey('ctrl', 'l')",body)
+        self.assertNotIn("hotkey('alt', 'n')",body)
+        self.assertNotIn("pyautogui.press('enter')",body)
+        self.assertIn("_write_windows_file_name(edit,str(path))",body)
+        self.assertIn("_paste_windows_file_name(edit,str(path))",body)
+
     def test_chatgpt_prompt_matches_parser_and_prefills_current_fields(self):
         import app
         prompt=app.build_chatgpt_draft_prompt(
