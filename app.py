@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.20'
+APP_VERSION = 'v18.21'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -739,6 +739,81 @@ def _wait_for_native_file_dialog(timeout=8.0):
     return False
 
 
+def _send_win32_dialog_message(edit, msg, wparam, address, timeout_ms=2500, sender=None):
+    """Pointer-sized SendMessageTimeoutW. WM_GETTEXT must receive buffer LENGTH in wParam."""
+    import ctypes
+    from ctypes import wintypes
+    if sender is None:
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        sender=user32.SendMessageTimeoutW
+        sender.argtypes=(wintypes.HWND,wintypes.UINT,ctypes.c_size_t,
+                         ctypes.c_ssize_t,wintypes.UINT,wintypes.UINT,
+                         ctypes.POINTER(ctypes.c_size_t))
+        sender.restype=ctypes.c_void_p
+    output=ctypes.c_size_t()
+    accepted=sender(edit,msg,wparam,address,2,timeout_ms,ctypes.byref(output))
+    return bool(accepted),int(output.value)
+
+
+def _verify_windows_file_name(edit, filename, sender=None):
+    """Read text from the actual Windows filename Edit; never trust clipboard input alone."""
+    import ctypes, os
+    expected=str(filename)
+    check=ctypes.create_unicode_buffer(max(1024,len(expected)+64))
+    # WM_GETTEXT's wParam is capacity in WCHARs; 0 always produces empty result.
+    ok,count=_send_win32_dialog_message(edit,0x000D,len(check),
+                                       ctypes.addressof(check),sender=sender)
+    if not ok or count<1:
+        return False
+    return os.path.normcase(check.value.strip().strip('"')) == os.path.normcase(expected)
+
+
+def _write_windows_file_name(edit, filename, sender=None):
+    """Set + verify an absolute filename in the native common dialog."""
+    import ctypes
+    value=ctypes.create_unicode_buffer(str(filename))
+    ok,_=_send_win32_dialog_message(edit,0x000C,0,
+                                    ctypes.addressof(value),sender=sender)
+    return bool(ok) and _verify_windows_file_name(edit,filename,sender=sender)
+
+
+def _paste_windows_file_name(edit, filename):
+    """Verified GUI fallback when WM_SETTEXT is ignored on a particular Windows build."""
+    import pyautogui, pyperclip, win32gui
+    if not edit or not win32gui.IsWindowVisible(edit):
+        return False
+    l,t,r,b=win32gui.GetWindowRect(edit)
+    if r-l<70 or b-t<10:
+        return False
+    backup=None
+    try:
+        backup=pyperclip.paste()
+    except Exception:
+        pass
+    try:
+        pyautogui.click((l+r)//2,(t+b)//2)
+        time.sleep(.2)
+        pyperclip.copy(str(filename))
+        pyautogui.hotkey('ctrl','a')
+        pyautogui.hotkey('ctrl','v')
+        time.sleep(.3)
+        if _verify_windows_file_name(edit,filename):
+            return True
+        # Some COM dialogs don't expose their edited value through WM_GETTEXT.
+        # Verify by copying from the focused field, using a sentinel against
+        # accidentally accepting the path we just put on the clipboard.
+        sentinel='SIAAEBI_FILENAME_VERIFICATION_EMPTY'
+        pyperclip.copy(sentinel)
+        pyautogui.hotkey('ctrl','a')
+        pyautogui.hotkey('ctrl','c')
+        time.sleep(.25)
+        return pyperclip.paste().strip().strip('"') == str(filename)
+    finally:
+        if backup is not None:
+            try:pyperclip.copy(backup)
+            except Exception:pass
+
+
 def upload_via_naver_button(path, photo_button, notify):
     """Fail closed when Windows file picker is missing; never type path into blog."""
     import pyautogui, pyperclip
@@ -776,55 +851,48 @@ def upload_via_naver_button(path, photo_button, notify):
     def dialog_closed():
         return not win32gui.IsWindow(dialog)
 
-    def fill_native_filename():
-        """Write and verify the Edit child of the File name combo by HWND."""
-        controls = []
-        name_combo = win32gui.GetDlgItem(dialog, 1148)
-        def collect(child, _):
-            if win32gui.GetClassName(child) == 'Edit' and win32gui.IsWindowVisible(child):
-                rect = win32gui.GetWindowRect(child)
-                if rect[2] - rect[0] > 70 and rect[3] - rect[1] > 10:
-                    controls.append((rect[1], child))
+    def filename_edits():
+        """Find the actual filename Edit beneath common dialog control 1148."""
+        controls=[]
+        name_combo=win32gui.GetDlgItem(dialog,1148)
+        def collect(child,_):
+            if win32gui.GetClassName(child)=='Edit' and win32gui.IsWindowVisible(child):
+                rect=win32gui.GetWindowRect(child)
+                if rect[2]-rect[0]>=70 and rect[3]-rect[1]>=12:
+                    controls.append((rect[1],child))
         if name_combo:
-            if win32gui.GetClassName(name_combo) == 'Edit':
-                collect(name_combo, None)
-            win32gui.EnumChildWindows(name_combo, collect, None)
+            if win32gui.GetClassName(name_combo)=='Edit':
+                collect(name_combo,None)
+            win32gui.EnumChildWindows(name_combo,collect,None)
         if not controls:
-            # Fallback for a file picker whose filename edit has another ID.
-            dlg_rect = win32gui.GetWindowRect(dialog)
-            win32gui.EnumChildWindows(dialog, collect, None)
-            controls = [item for item in controls
-                        if item[0] > dlg_rect[1] + (dlg_rect[3] - dlg_rect[1]) * .55]
-        if not controls:
-            return False
-        # File name is below the file grid, while Search and Address are above it.
-        edit = sorted(controls, reverse=True)[0][1]
-        user32 = ctypes.WinDLL('user32', use_last_error=True)
-        user32.SendMessageTimeoutW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
-                                               wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
-                                               ctypes.POINTER(ctypes.c_size_t))
-        user32.SendMessageTimeoutW.restype = wintypes.LPARAM
-        def send(msg, arg, timeout_ms=2500):
-            result = ctypes.c_size_t()
-            ok = user32.SendMessageTimeoutW(edit, msg, 0, arg, 2, timeout_ms, ctypes.byref(result))
-            return bool(ok)
-        full_name = str(path)
-        value = ctypes.create_unicode_buffer(full_name)
-        if not send(0x000C, ctypes.addressof(value)):  # WM_SETTEXT
-            return False
-        check = ctypes.create_unicode_buffer(max(32768, len(full_name) + 1))
-        if not send(0x000D, ctypes.addressof(check)):  # WM_GETTEXT
-            return False
-        return os.path.normcase(check.value.strip().strip('"')) == os.path.normcase(full_name)
+            dlg_rect=win32gui.GetWindowRect(dialog)
+            win32gui.EnumChildWindows(dialog,collect,None)
+            controls=[item for item in controls
+                      if item[0]>dlg_rect[1]+(dlg_rect[3]-dlg_rect[1])*.55]
+        return [item[1] for item in sorted(controls,reverse=True)]
 
-    try:
-        opened = fill_native_filename()
-    except Exception as e:
-        notify('Windows 기본 파일명 입력 확인 실패, 대체 방식으로 전환: ' + str(e))
-        opened = False
+    edits=filename_edits()
+    if not edits:
+        raise RuntimeError('Windows 사진 선택 창의 파일 이름 입력칸을 찾지 못했습니다. '
+                           '화면 배율이나 파일 선택 창 구성에 따라 달라질 수 있습니다: '+path.name)
+    opened=False
+    for edit in edits:
+        try:
+            opened=_write_windows_file_name(edit,str(path))
+        except Exception as e:
+            notify('Windows 파일명 직접 입력 실패 · 클릭 후 붙여넣기 시도: '+str(e))
+        if not opened:
+            try:
+                opened=_paste_windows_file_name(edit,str(path))
+            except Exception as e:
+                notify('파일 이름 칸 붙여넣기 실패: '+str(e))
+        if opened:
+            notify('사진 파일 전체 경로 입력·읽기 검증 성공: '+path.name)
+            break
     if not opened:
-        raise RuntimeError('사진 파일 이름 입력칸에 경로를 확인할 수 없습니다. '
-                           '잘못된 파일이 열리지 않도록 자동 첨부를 중단했습니다: ' + path.name)
+        raise RuntimeError('사진 선택 창의 파일 이름 입력·검증에 실패했습니다. '
+                           '다른 파일이 열리지 않도록 중단했습니다: '+path.name
+                           +' / 입력창 후보 '+str(len(edits))+'개')
     notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
     # Only click a verified IDOK button owned by the SAME active picker.
     # Blind Enter can open the highlighted photo in a viewer.
