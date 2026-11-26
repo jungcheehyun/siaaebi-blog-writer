@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.22'
+APP_VERSION = 'v18.23'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -781,10 +781,84 @@ def _write_windows_file_name(edit, filename, sender=None):
     return bool(ok) and _verify_windows_file_name(edit,filename,sender=sender)
 
 
+def _focused_windows_filename_control(dialog):
+    """Return a verified filename field focused inside the native Windows picker.
+
+    GetFocus() cannot inspect another process's UI thread. GetGUIThreadInfo
+    can, so Alt+N recovery is only allowed after the picker is in foreground.
+    Reject Search, address bar, file grid, and the file-type dropdown.
+    """
+    import ctypes, win32gui, win32process
+    from ctypes import wintypes
+
+    class GUIThreadInfo(ctypes.Structure):
+        _fields_ = [
+            ('cbSize', wintypes.DWORD), ('flags', wintypes.DWORD),
+            ('hwndActive', wintypes.HWND), ('hwndFocus', wintypes.HWND),
+            ('hwndCapture', wintypes.HWND), ('hwndMenuOwner', wintypes.HWND),
+            ('hwndMoveSize', wintypes.HWND), ('hwndCaret', wintypes.HWND),
+            ('rcCaret', wintypes.RECT),
+        ]
+
+    if not dialog or win32gui.GetForegroundWindow() != dialog:
+        return None
+    try:
+        thread_id, _ = win32process.GetWindowThreadProcessId(dialog)
+        info = GUIThreadInfo()
+        info.cbSize = ctypes.sizeof(info)
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        user32.GetGUIThreadInfo.argtypes = (wintypes.DWORD, ctypes.POINTER(GUIThreadInfo))
+        user32.GetGUIThreadInfo.restype = wintypes.BOOL
+        if not user32.GetGUIThreadInfo(thread_id,ctypes.byref(info)):
+            return None
+        focus=int(info.hwndFocus or 0)
+        if not focus or not win32gui.IsWindow(focus) or not win32gui.IsChild(dialog,focus):
+            return None
+        if win32gui.GetClassName(focus) not in ('Edit','ComboBox'):
+            return None
+        rect=win32gui.GetWindowRect(focus)
+        frame=win32gui.GetWindowRect(dialog)
+        left,top,right,bottom=rect
+        dleft,dtop,dright,dbottom=frame
+        # File name is on the lower part of the dialog, near the left edge.
+        if right-left<100 or bottom-top<12 or top < dtop+(dbottom-dtop)*.55:
+            return None
+        if left>=dleft+(dright-dleft)*.65:
+            return None
+        # Prefer a descendant of the standard file-name ID 1148 if available.
+        control=focus
+        for _ in range(8):
+            if win32gui.GetDlgCtrlID(control)==1148:
+                return focus
+            control=win32gui.GetParent(control)
+            if not control or control==dialog:
+                break
+        # The modern COM picker can reparent this Edit and use other IDs.
+        return focus
+    except Exception:
+        return None
+
+
+def _recover_filename_control_with_shortcut(dialog, notify):
+    """Use Korean/English '파일 이름(N)' Alt+N ONLY in a confirmed picker."""
+    import pyautogui,win32gui
+    if not dialog or win32gui.GetForegroundWindow()!=dialog:
+        return None
+    notify('파일 이름 칸 복구 시도: Windows 단축키 Alt+N')
+    pyautogui.hotkey('alt','n')
+    time.sleep(.5)
+    return _focused_windows_filename_control(dialog)
+
+
 def _paste_windows_file_name(edit, filename):
     """Verified GUI fallback when WM_SETTEXT is ignored on a particular Windows build."""
     import pyautogui, pyperclip, win32gui
     if not edit or not win32gui.IsWindowVisible(edit):
+        return False
+    root=win32gui.GetAncestor(edit,2)  # GA_ROOT, native picker
+    if not root or win32gui.GetClassName(root)!='#32770':
+        return False
+    if win32gui.GetForegroundWindow()!=root:
         return False
     l,t,r,b=win32gui.GetWindowRect(edit)
     if r-l<70 or b-t<10:
@@ -797,6 +871,12 @@ def _paste_windows_file_name(edit, filename):
     try:
         pyautogui.click((l+r)//2,(t+b)//2)
         time.sleep(.2)
+        if win32gui.GetForegroundWindow()!=root:
+            return False
+        # If modern Windows moved focus into another field, do not type.
+        focused=_focused_windows_filename_control(root)
+        if focused not in (edit,None):
+            return False
         pyperclip.copy(str(filename))
         pyautogui.hotkey('ctrl','a')
         pyautogui.hotkey('ctrl','v')
@@ -876,27 +956,46 @@ def upload_via_naver_button(path, photo_button, notify, photo_settle_seconds=12)
         return [item[1] for item in sorted(controls,reverse=True)]
 
     edits=filename_edits()
-    if not edits:
-        raise RuntimeError('Windows 사진 선택 창의 파일 이름 입력칸을 찾지 못했습니다. '
-                           '화면 배율이나 파일 선택 창 구성에 따라 달라질 수 있습니다: '+path.name)
+    notify('파일 선택 창 확인 · 입력칸 후보 '+str(len(edits))+'개 · 사진: '+path.name)
     opened=False
     for edit in edits:
+        if dialog_closed() or win32gui.GetForegroundWindow()!=dialog:
+            raise RuntimeError('파일명을 입력하기 전에 사진 선택 창의 포커스가 바뀌었습니다: '+path.name)
         try:
             opened=_write_windows_file_name(edit,str(path))
         except Exception as e:
-            notify('Windows 파일명 직접 입력 실패 · 클릭 후 붙여넣기 시도: '+str(e))
+            notify('Windows 파일명 직접 입력 오류: '+str(e))
         if not opened:
             try:
                 opened=_paste_windows_file_name(edit,str(path))
             except Exception as e:
-                notify('파일 이름 칸 붙여넣기 실패: '+str(e))
+                notify('파일 이름 칸 붙여넣기 오류: '+str(e))
         if opened:
             notify('사진 파일 전체 경로 입력·읽기 검증 성공: '+path.name)
             break
     if not opened:
-        raise RuntimeError('사진 선택 창의 파일 이름 입력·검증에 실패했습니다. '
-                           '다른 파일이 열리지 않도록 중단했습니다: '+path.name
-                           +' / 입력창 후보 '+str(len(edits))+'개')
+        # A different Windows 10/11 dialog layout may expose no Edit under
+        # standard control 1148. Focus the File name(N) field by accelerator.
+        # Never use Alt+N when a browser/Explorer/viewer has foreground focus.
+        focus_edit=_recover_filename_control_with_shortcut(dialog,notify)
+        if focus_edit:
+            notify('파일명 단축키로 입력칸 확인 · ID='+
+                   str(win32gui.GetDlgCtrlID(focus_edit)))
+            try:
+                opened=_write_windows_file_name(focus_edit,str(path))
+            except Exception as e:
+                notify('복구된 파일명 칸 직접 입력 오류: '+str(e))
+            if not opened:
+                opened=_paste_windows_file_name(focus_edit,str(path))
+        else:
+            notify('Alt+N 후 파일 이름 칸 확인 실패 · 다른 곳에 입력하지 않고 중단')
+    if not opened:
+        raise RuntimeError(
+            'Windows 파일 이름 칸 자동 입력 실패: '+path.name+
+            ' / 입력칸 후보 '+str(len(edits))+'개 / Alt+N 복구 시도 완료. '
+            '다른 창에 경로를 입력하지 않도록 정지했습니다. '
+            'F7 이어쓰기로 이 사진부터 재시도할 수 있습니다.')
+    notify('사진 경로 검증 성공 · 이제 Windows 열기 버튼 실행: '+path.name)
     notify('Windows 사진 파일 이름 칸에 전체 경로 입력 확인: ' + path.name)
     # Only click a verified IDOK button owned by the SAME active picker.
     # Blind Enter can open the highlighted photo in a viewer.
