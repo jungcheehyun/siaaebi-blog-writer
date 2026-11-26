@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_VERSION = 'v18.21'
+APP_VERSION = 'v18.22'
 RELEASES_API = 'https://api.github.com/repos/jungcheehyun/siaaebi-blog-writer/releases/latest'
 UPDATE_ASSET = 'siaaebi-update.zip'
 CHECKSUM_ASSET = 'siaaebi-update.zip.sha256'
@@ -248,16 +248,20 @@ def load_editor_positions():
                 result[key] = tuple(point)
         offset = data.get('quote_exit_offset', 500)
         result['quote_exit_offset'] = offset if isinstance(offset, int) and 100 <= offset <= 1500 else 500
+        delay=data.get('photo_settle_seconds',12)
+        result['photo_settle_seconds']=delay if type(delay) is int and 8 <= delay <= 30 else 12
         result['body_anchor_verified'] = data.get('body_anchor_verified') is True
         return result
     except (OSError, ValueError, TypeError):
-        return {'quote_exit_offset': 500, 'body_anchor_verified': False}
+        return {'quote_exit_offset': 500, 'photo_settle_seconds':12, 'body_anchor_verified': False}
 
 def save_editor_positions(values):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     payload = {key: list(getattr(values, key)) if getattr(values, key) else None
                for key in POSITION_FIELDS}
     payload['quote_exit_offset'] = int(values.quote_exit_offset.get())
+    photo_delay=getattr(values,'photo_settle_seconds',None)
+    payload['photo_settle_seconds'] = int(photo_delay.get()) if photo_delay is not None else 12
     payload['body_anchor_verified'] = bool(getattr(values,'body_anchor_verified',False))
     tmp = CONFIG_PATH.with_suffix('.tmp')
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -814,7 +818,7 @@ def _paste_windows_file_name(edit, filename):
             except Exception:pass
 
 
-def upload_via_naver_button(path, photo_button, notify):
+def upload_via_naver_button(path, photo_button, notify, photo_settle_seconds=12):
     """Fail closed when Windows file picker is missing; never type path into blog."""
     import pyautogui, pyperclip
     if not photo_button:
@@ -833,7 +837,7 @@ def upload_via_naver_button(path, photo_button, notify):
     notify(f'상단 초록색 [사진] 버튼 클릭: ({x}, {y})')
     pyautogui.moveTo(x, y, duration=.3)
     pyautogui.click(x=x, y=y)
-    if not _wait_for_native_file_dialog(timeout=8.0):
+    if not _wait_for_native_file_dialog(timeout=16.0):
         raise RuntimeError(
             '상단 [사진] 버튼 클릭 후 Windows 파일 선택 창을 확인하지 못했습니다.\n'
             '네이버 글쓰기 창을 최대화하고 [네이버 사진 버튼 위치 지정 (5초)]으로 '
@@ -907,7 +911,7 @@ def upload_via_naver_button(path, photo_button, notify):
             and dlg_top <= top < bottom <= dlg_bottom):
         raise RuntimeError('사진 선택 창의 열기 버튼 좌표가 비정상입니다: ' + path.name)
     pyautogui.click((left + right) // 2, (top + bottom) // 2)
-    for _ in range(28):
+    for _ in range(100):
         if dialog_closed():
             break
         time.sleep(.25)
@@ -931,9 +935,23 @@ def upload_via_naver_button(path, photo_button, notify):
             '사진이 뷰어로 열렸거나 다른 창에 포커스가 있을 수 있습니다. '
             '자동입력을 중단했습니다: ' + path.name + ' / 활성 창: ' + active_title[:70])
     notify('사진 선택 창 닫힘 · 네이버 화면 복귀 확인: ' + path.name)
-    # Allow slower OneDrive/synced images to finish loading before A. is entered.
-    time.sleep(6.0 if path.suffix.lower() != '.gif' else 7.5)
-    notify('사진 처리 대기 완료: ' + path.name + ' (실제 게시글 이미지 표시 여부는 화면에서 확인)')
+    # The file chooser closing is NOT proof of completion in SmartEditor.
+    # Offer a conservative, per-PC configurable pause; account for large files.
+    # We cannot inspect Naver's internal upload state without a browser integration.
+    base=max(8,min(30,int(photo_settle_seconds)))
+    try:
+        size_padding=min(6,int(path.stat().st_size / 2000000))
+    except OSError:
+        size_padding=0
+    delay=min(36,base+size_padding+(3 if path.suffix.lower()=='.gif' else 0))
+    notify(f'네이버 사진 처리 대기 {delay}초: '+path.name)
+    time.sleep(delay)
+    if _wait_for_native_file_dialog(timeout=.2):
+        raise RuntimeError('사진 대기 중 파일 선택 창이 다시 열렸습니다. 자동입력을 중단합니다: '+path.name)
+    active_hwnd=win32gui.GetForegroundWindow()
+    if not active_hwnd or win32gui.GetClassName(active_hwnd) not in ('Chrome_WidgetWin_1','MozillaWindowClass'):
+        raise RuntimeError('사진 대기 후 네이버 브라우저가 활성 상태가 아닙니다. 자동입력을 중단합니다: '+path.name)
+    notify('사진 처리 대기 완료: '+path.name+' (본문에 실제 첨부됐는지 확인 가능)')
 
 
 def apply_quote(quote_button, quote_style, notify):
@@ -949,17 +967,21 @@ def apply_quote(quote_button, quote_style, notify):
 
 
 def exit_final_quote(notify):
-    """Exit final quotation at the CURRENT end of the document, not a stale screen point.
+    """Select the whole SmartEditor quote and insert a NEW NORMAL paragraph below.
 
-    SmartEditor often needs two Enter presses at the end of a quotation.
-    The final Q is deliberately short; we avoid moving the caret by a fixed pixel
-    distance, which previously landed in an old question/hashtag paragraph.
+    Two Enter presses *inside the quote* can create two lines INSIDE the frame.
+    SmartEditor quote widgets use Down, Down, Enter to select the quote block
+    and create the following paragraph (rather than adding quote-internal lines).
+    Keep this flow independent of pixel coordinates / scrolling / machine DPI.
     """
     import pyautogui
     pyautogui.press('end')
-    pyautogui.press('enter', presses=2, interval=.2)
-    time.sleep(.45)
-    notify('마무리한마디 프레임 종료: 다음 줄부터 일반 본문 입력')
+    time.sleep(.2)
+    pyautogui.press('down', presses=2, interval=.3)
+    time.sleep(.25)
+    pyautogui.press('enter')
+    time.sleep(.85)
+    notify('마무리한마디 프레임 선택 → 아래 일반 본문 생성 (↓ 두 번 + Enter)')
 
 
 def click_below_intro_quote(body_point, offset_px, notify):
@@ -983,7 +1005,8 @@ def click_below_intro_quote(body_point, offset_px, notify):
 def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
                    quote_button, subtitle_quote_style, question_quote_style, final_quote_style,
                    quote_exit_offset, pause_event, stop_event,
-                   start_block=0, title_done=False, progress=None):
+                   start_block=0, title_done=False, progress=None,
+                   photo_settle_seconds=12):
     """Foreground keyboard entry; supports checkpoint restart without rewriting the title."""
     import pyautogui
     pyautogui.PAUSE=.08
@@ -1028,7 +1051,8 @@ def automate_naver(data, notify, wait_for_focus, photo_button, body_point,
             notify('사진 ' + str(sum(1 for prev in blocks[:i+1] if prev['type']=='image'))
                    + '/' + str(sum(1 for item in blocks if item['type']=='image'))
                    + ' 첨부 시도: ' + Path(b['path']).name)
-            upload_via_naver_button(b['path'],photo_button,notify)
+            upload_via_naver_button(b['path'],photo_button,notify,
+                                   photo_settle_seconds=photo_settle_seconds)
             check_control(pause_event,stop_event)
             # The user specifically wants A. immediately after the photo.
             # NEVER synthesize an Enter after the photo: it creates a blank
@@ -1159,6 +1183,8 @@ class App:
         self.body_anchor_verified=saved_positions.get('body_anchor_verified',False)
         self.quote_exit_offset=tk.IntVar(value=saved_positions.get('quote_exit_offset',500))
         self.quote_exit_offset.trace_add('write', self.save_positions_if_valid)
+        self.photo_settle_seconds=tk.IntVar(value=saved_positions.get('photo_settle_seconds',12))
+        self.photo_settle_seconds.trace_add('write', self.save_positions_if_valid)
         ttk.Label(main,text='전역 단축키: F7 입력 시작 · F8 일시정지/이어쓰기 · F9 중지',foreground='#175b80').pack(anchor='w')
         positions_panel=ttk.LabelFrame(main,text='네이버 위치 설정')
         self.positions_open=tk.BooleanVar(value=False)
@@ -1172,11 +1198,17 @@ class App:
         ttk.Button(positions_panel,text='인용구 메뉴 버튼 지정 (5초)',command=lambda:self.capture_point('quote_button','네이버 인용구 메뉴 버튼')).pack(anchor='w')
         ttk.Button(positions_panel,text='부제목용 따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('subtitle_quote_style','펼쳐진 인용구 메뉴의 따옴표 스타일')).pack(anchor='w')
         ttk.Button(positions_panel,text='Q용 라인&따옴표 스타일 지정 (5초)',command=lambda:self.capture_point('question_quote_style','펼쳐진 인용구 메뉴의 네 번째 라인&따옴표 스타일')).pack(anchor='w')
-        ttk.Button(positions_panel,text='마지막 Q용 프레임 스타일 지정 (5초)',command=lambda:self.capture_point('final_quote_style','펼쳐진 인용구 메뉴의 프레임 스타일')).pack(anchor='w')
+        ttk.Button(positions_panel,text='마무리한마디 프레임 스타일 지정 (5초)',command=lambda:self.capture_point('final_quote_style','펼쳐진 인용구 메뉴의 프레임 스타일')).pack(anchor='w')
         exit_row=ttk.Frame(positions_panel);exit_row.pack(fill='x',pady=(5,0))
         ttk.Label(exit_row,text='인용구 아래 클릭 거리 (px)').pack(side='left')
         ttk.Spinbox(exit_row,from_=100,to=1500,increment=25,width=7,textvariable=self.quote_exit_offset).pack(side='left',padx=(8,6))
         ttk.Label(exit_row,text='기본 500 · 본문 첫 줄 좌표 기준 · 화면 배율이 바뀌면 재조정',foreground='#5d6870').pack(side='left')
+        photo_delay_row=ttk.Frame(positions_panel);photo_delay_row.pack(fill='x',pady=(5,0))
+        ttk.Label(photo_delay_row,text='사진 업로드 후 대기 시간 (초)').pack(side='left')
+        ttk.Spinbox(photo_delay_row,from_=8,to=30,increment=2,width=6,
+                    textvariable=self.photo_settle_seconds).pack(side='left',padx=(8,6))
+        ttk.Label(photo_delay_row,text='기본 12초 · 느린 PC는 18~24초 권장 (큰 파일은 추가 대기)',
+                  foreground='#5d6870').pack(side='left')
 
         positions_row=ttk.Frame(positions_panel);positions_row.pack(fill='x',pady=(4,4))
         ttk.Label(positions_row,text='위치 설정은 자동 저장되며 다음 실행과 새 버전에서도 불러옵니다',foreground='#175b80').pack(side='left')
@@ -1203,6 +1235,8 @@ class App:
         try:
             offset=int(self.quote_exit_offset.get())
             if not 100 <= offset <= 1500:return
+            photo_delay=int(self.photo_settle_seconds.get())
+            if not 8 <= photo_delay <= 30:return
             save_editor_positions(self)
         except (ValueError, tk.TclError, OSError):
             pass
@@ -1212,6 +1246,7 @@ class App:
         for field in POSITION_FIELDS:setattr(self,field,None)
         self.body_anchor_verified=False
         self.quote_exit_offset.set(500)
+        self.photo_settle_seconds.set(12)
         self.save_positions_if_valid()
         self.set_saved_positions_status()
         self.setstatus('위치 설정 초기화 완료 — 다음 입력 전 다시 위치를 지정해 주세요')
@@ -1538,7 +1573,8 @@ class App:
                 self.quote_button,self.subtitle_quote_style,self.question_quote_style,
                 self.final_quote_style,self.quote_exit_offset.get(),self.pause_event,
                 self.stop_event,start_block=self.resume_start_block,
-                title_done=self.resume_title_done,progress=save_progress)
+                title_done=self.resume_title_done,progress=save_progress,
+                photo_settle_seconds=self.photo_settle_seconds.get())
             clear_resume_checkpoint(self.data)
             finished=True
         except InputCancelled as e:
